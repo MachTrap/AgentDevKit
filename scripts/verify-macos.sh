@@ -33,7 +33,11 @@ for lane in AgentTesting AppGroupTesting LoopbackTesting; do
     cat "$log"
     exit 1
   fi
-  grep -F "$scheme can only build in Debug configuration" "$log"
+  if ! grep -F "$scheme can only build in Debug configuration" "$log"; then
+    cat "$log"
+    echo "error: $scheme failed before reaching the Release guard." >&2
+    exit 1
+  fi
   test ! -e "$root/rejected/Build/Products/Release/$scheme.app/Contents/MacOS/$scheme"
 done
 

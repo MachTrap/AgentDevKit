@@ -17,4 +17,20 @@ jobs:
         with:
           persist-credentials: false
       - name: Build source tools and verify Release isolation and Testing lifecycle
-        run: bash scripts/verify-macos.sh
+        shell: bash
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          if bash scripts/verify-macos.sh 2>&1 | tee "$RUNNER_TEMP/agentdevkit-verification.log"; then
+            exit 0
+          fi
+          detail=$(grep -E 'error:|Error:|Traceback|AssertionError|requires Swift' "$RUNNER_TEMP/agentdevkit-verification.log" | tail -n 8 || true)
+          if [[ -z "$detail" ]]; then
+            detail=$(tail -n 8 "$RUNNER_TEMP/agentdevkit-verification.log")
+          fi
+          detail=${detail//%/%25}
+          detail=${detail//$'\r'/%0D}
+          detail=${detail//$'\n'/%0A}
+          echo "::error title=macOS verification failed::$detail"
+          exit 1
