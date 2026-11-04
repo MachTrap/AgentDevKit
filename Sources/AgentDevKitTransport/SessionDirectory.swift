@@ -1,10 +1,13 @@
 import AgentDevKitCore
 import Darwin
 import Foundation
+import Security
 
 package struct SessionDescriptor: Codable, Sendable {
     package let identity: SessionIdentity
     package let auth: String
+    package var port: UInt16?
+    package var certificatePin: Data?
 
     package init(identity: SessionIdentity, auth: String) {
         self.identity = identity
@@ -14,12 +17,38 @@ package struct SessionDescriptor: Codable, Sendable {
 
 package struct SessionDirectory: Sendable {
     private let url: URL
+    private let source: SessionSource
 
-    package init(id: UUID) throws {
-        url = try Self.root().appendingPathComponent(id.uuidString, isDirectory: true)
+    package init(id: UUID, source: SessionSource = .local) throws {
+        self.source = source
+        url = try Self.root(source).appendingPathComponent(Self.name(id, source), isDirectory: true)
     }
 
-    private static func root() throws -> URL {
+    private static func name(_ id: UUID, _ source: SessionSource) -> String {
+        if case .appGroup = source { return String(id.uuidString.replacingOccurrences(of: "-", with: "").prefix(16)) }
+        return id.uuidString
+    }
+
+    private static func root(_ source: SessionSource) throws -> URL {
+        switch source {
+        case .local:
+            return try localRoot()
+        case .appGroup(let identifier):
+            guard !identifier.isEmpty,
+                  let task = SecTaskCreateFromSelf(nil),
+                  let groups = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) as? [String],
+                  groups.contains(identifier),
+                  let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+            else { throw Failure(.sessionExpired, "App Group unavailable. Check signing team and App Group entitlement.") }
+            return container.appendingPathComponent("a", isDirectory: true)
+        case .pairingDirectory(let folder):
+            do { try check(folder.path, type: S_IFDIR, mode: 0o700) }
+            catch { throw Failure(.sessionExpired, "Pairing folder unavailable. Select an accessible folder owned by you with mode 0700.") }
+            return folder.appendingPathComponent("adk", isDirectory: true)
+        }
+    }
+
+    private static func localRoot() throws -> URL {
         let length = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
         guard length > 0 else { throw SocketError.system }
         var buffer = [CChar](repeating: 0, count: length)
@@ -54,7 +83,7 @@ package struct SessionDirectory: Sendable {
 
     package func withdraw() {
         unlink(descriptorPath)
-        unlink(socketPath)
+        if !source.isLoopback { unlink(socketPath) }
     }
 
     package func remove() {
@@ -63,21 +92,25 @@ package struct SessionDirectory: Sendable {
         rmdir(url.path)
     }
 
-    package static func discover() throws -> [SessionDescriptor] {
-        let root = try root()
+    package static func discover(_ source: SessionSource = .local) throws -> [SessionDescriptor] {
+        let root = try root(source)
         var info = stat()
         if lstat(root.path, &info) == -1 && errno == ENOENT { return [] }
         try check(root.path, type: S_IFDIR, mode: 0o700)
         return try FileManager.default.contentsOfDirectory(atPath: root.path).compactMap { name in
-            guard let id = UUID(uuidString: name), name == id.uuidString,
-                  let directory = try? SessionDirectory(id: id) else { return nil }
-            return try? directory.read(id: id)
+            let directory = SessionDirectory(url: root.appendingPathComponent(name), source: source)
+            return try? directory.read(name: name)
         }
     }
 
-    private func read(id: UUID) throws -> SessionDescriptor {
+    private init(url: URL, source: SessionSource) {
+        self.url = url
+        self.source = source
+    }
+
+    private func read(name: String) throws -> SessionDescriptor {
         try Self.check(url.path, type: S_IFDIR, mode: 0o700)
-        try Self.check(socketPath, type: S_IFSOCK, mode: 0o600)
+        if !source.isLoopback { try Self.check(socketPath, type: S_IFSOCK, mode: 0o600) }
         let fd = open(descriptorPath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else { throw SocketError.system }
         let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -88,7 +121,10 @@ package struct SessionDirectory: Sendable {
         else { throw SocketError.system }
 
         let descriptor = try JSONDecoder().decode(SessionDescriptor.self, from: data)
-        guard descriptor.identity.sessionId == id,
+        guard Self.name(descriptor.identity.sessionId, source) == name,
+              source.isLoopback
+                ? (descriptor.port ?? 0) > 0 && descriptor.certificatePin?.count == 32
+                : descriptor.port == nil && descriptor.certificatePin == nil,
               descriptor.auth.utf8.count == 44,
               Self.launchDate(pid: descriptor.identity.pid) == descriptor.identity.launchedAt
         else { throw SocketError.disconnected }
@@ -111,5 +147,17 @@ package struct SessionDirectory: Sendable {
 
     private static func matches(_ info: stat, type: mode_t, mode: mode_t) -> Bool {
         info.st_uid == geteuid() && info.st_mode & S_IFMT == type && info.st_mode & 0o7777 == mode
+    }
+}
+
+
+public enum SessionSource: Sendable {
+    case local
+    case appGroup(String)
+    case pairingDirectory(URL)
+
+    package var isLoopback: Bool {
+        if case .pairingDirectory = self { return true }
+        return false
     }
 }

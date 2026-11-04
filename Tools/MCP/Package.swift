@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "agentdevkit-mcp", targets: ["agentdevkit-mcp"])],
     dependencies: [
-        .package(path: "../.."),
+        .package(name: "AgentDevKit", path: "../.."),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")
     ],
     targets: [

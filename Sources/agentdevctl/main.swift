@@ -5,6 +5,8 @@ import Foundation
 
 let usage = """
 Usage:
+  agentdevctl --version
+  Session source options (before command): --app-group ID | --pairing-dir PATH
   agentdevctl session list [--json]
   agentdevctl [--session ID_OR_BUNDLE] session ping [--json]
   agentdevctl [--session ID_OR_BUNDLE] capabilities [--json]
@@ -26,15 +28,31 @@ if let index = arguments.firstIndex(of: "--json") { arguments.remove(at: index) 
 
 do {
     var selector: String?
-    if arguments.first == "--session", arguments.count >= 2 {
-        selector = arguments[1]
+    var source: SessionSource = .local
+    var sourceSet = false
+    let globalOptions = ["--session", "--app-group", "--pairing-dir"]
+    while let option = arguments.first, globalOptions.contains(option) {
+        guard arguments.count >= 2, !arguments[1].isEmpty, !arguments[1].hasPrefix("--") else {
+            throw Failure(.invalidParams, "Missing value for \(option).")
+        }
+        let value = arguments[1]
+        if option == "--session" {
+            guard selector == nil else { throw Failure(.invalidParams, "Select a single session.") }
+            selector = value
+        } else {
+            guard !sourceSet else { throw Failure(.invalidParams, "Select one session source.") }
+            sourceSet = true
+            source = option == "--app-group" ? .appGroup(value) : .pairingDirectory(URL(fileURLWithPath: value, isDirectory: true))
+        }
         arguments.removeFirst(2)
     }
     switch arguments {
+    case ["--version"]:
+        print("0.2.0")
     case ["--help"], ["-h"]:
         print(usage)
     case ["session", "list"] where selector == nil:
-        let sessions = try AgentClient.sessions()
+        let sessions = try AgentClient.sessions(source: source)
         if json {
             try printJSON(sessions)
         } else if sessions.isEmpty {
@@ -45,14 +63,14 @@ do {
             }
         }
     case ["session", "ping"]:
-        let response = try await AgentClient(session: selector).hello()
+        let response = try await AgentClient(session: selector, source: source).hello()
         if json {
             try printJSON(response)
         } else if let app = response.result {
             print("\(app.bundleId)  PID \(app.pid)  \(app.protocolVersion)  \(app.sessionId)")
         }
     case ["capabilities"]:
-        let response = try await AgentClient(session: selector).capabilities()
+        let response = try await AgentClient(session: selector, source: source).capabilities()
         if json {
             try printJSON(response)
         } else if let capabilities = response.result {
@@ -61,17 +79,17 @@ do {
     case _ where arguments.starts(with: ["state"]):
         let options = try Options(arguments.dropFirst(), allowed: ["--scope"])
         let input = SnapshotRequest(scope: options.values["--scope"] ?? "current-screen")
-        let result = try await AgentClient(session: selector).call(AppCommands.snapshot, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.snapshot, input)
         try printResult(result) { "\($0.screenId)  revision \($0.revision)  ready=\($0.ready)" }
     case _ where arguments.starts(with: ["navigation", "open"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--route", "--context"], allowWait: true)
         let input = OpenScreen(route: try options.require("--route"), context: try options.context(), waitForReady: options.wait)
-        let result = try await AgentClient(session: selector).call(AppCommands.open, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.open, input)
         try printResult(result) { "\($0.screenId)  ready=\($0.ready)" }
     case _ where arguments.starts(with: ["fixtures", "load"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--fixture"])
         let input = LoadFixture(fixture: try options.require("--fixture"))
-        let result = try await AgentClient(session: selector).call(AppCommands.load, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.load, input)
         try printResult(result) { "Loaded \($0.fixture)  revision \($0.revision)" }
     case _ where arguments.starts(with: ["scenario", "prepare"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--fixture", "--route", "--context"], allowWait: true)
@@ -79,7 +97,7 @@ do {
             fixture: try options.require("--fixture"), route: try options.require("--route"),
             context: try options.context(), waitForReady: options.wait
         )
-        let result = try await AgentClient(session: selector).call(AppCommands.prepare, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.prepare, input)
         try printResult(result) { "\($0.fixture.fixture) → \($0.screen.screenId)  ready=\($0.screen.ready)" }
     case _ where arguments.starts(with: ["observe"]):
         let options = try Options(arguments.dropFirst(), allowed: ["--scope", "--since", "--limit"])
@@ -87,7 +105,7 @@ do {
             scope: options.values["--scope"] ?? "current-screen",
             sinceRevision: try options.parse("--since", UInt64.init), limit: try options.parse("--limit", Int.init)
         )
-        let result = try await AgentClient(session: selector).call(AppCommands.observe, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.observe, input)
         try printResult(result) {
             let progress = $0.delta.map { "\($0.events.count) events  next revision \($0.nextRevision)  more=\($0.hasMore)" }
                 ?? ($0.resynced ? "cursor expired, fresh snapshot" : "snapshot")
@@ -103,7 +121,7 @@ do {
             field: options.values["--field"], value: try options.decode("--value", as: JSONValue.self)
         )
         let timeout = try options.parse("--timeout-ms", Int.init) ?? Wire.maxTimeoutMs
-        let result = try await AgentClient(session: selector).call(AppCommands.wait, input, timeoutMs: timeout)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.wait, input, timeoutMs: timeout)
         try printResult(result) { "Satisfied at revision \($0.screen.revision)" }
     case _ where arguments.starts(with: ["events", "since"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--revision", "--limit"])
@@ -111,7 +129,7 @@ do {
             throw Failure(.invalidParams, "Missing --revision.")
         }
         let input = EventsRequest(revision: revision, limit: try options.parse("--limit", Int.init))
-        let result = try await AgentClient(session: selector).call(AppCommands.events, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.events, input)
         try printResult(result) { "\($0.events.count) events  next revision \($0.nextRevision)  more=\($0.hasMore)" }
     case _ where arguments.starts(with: ["diagnostics", "recent"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--severity", "--category", "--limit"])
@@ -119,10 +137,10 @@ do {
             severity: try options.parse("--severity", DiagnosticRecord.Severity.init(rawValue:)),
             category: options.values["--category"], limit: try options.parse("--limit", Int.init)
         )
-        let result = try await AgentClient(session: selector).call(AppCommands.diagnostics, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.diagnostics, input)
         try printResult(result) { $0.map { "\($0.code)  \($0.message)" }.joined(separator: "\n") }
     case ["actions", "list"]:
-        let result = try await AgentClient(session: selector).call(AppCommands.actions, EmptyParameters())
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.actions, EmptyParameters())
         try printResult(result) { $0.map { "\($0.id)  enabled=\($0.enabled)" }.joined(separator: "\n") }
     case _ where arguments.starts(with: ["action", "invoke"]):
         let options = try Options(arguments.dropFirst(2), allowed: ["--id", "--args", "--revision"])
@@ -132,7 +150,7 @@ do {
         let input = ActionRequest(
             actionId: try options.require("--id"), arguments: args, expectedRevision: try options.parse("--revision", UInt64.init)
         )
-        let result = try await AgentClient(session: selector).call(AppCommands.invoke, input)
+        let result = try await AgentClient(session: selector, source: source).call(AppCommands.invoke, input)
         try printResult(result) { "Saved at revision \($0.revision)" }
     default:
         throw Failure(.invalidParams, usage)

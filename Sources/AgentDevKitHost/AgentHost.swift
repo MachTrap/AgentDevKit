@@ -10,6 +10,16 @@ import Security
 /// Own one instance per opted-in application process. Call stop at session end.
 public actor AgentHost {
     private let log = Logger(subsystem: "dev.agentdevkit", category: "commands")
+    public enum Transport: Sendable {
+        case local
+        case appGroup(String)
+        case pairedLoopback(directory: URL, makeIdentity: @Sendable () throws -> SecIdentity)
+    }
+
+    private var starting = false
+    private var startupStops: [CheckedContinuation<Void, Never>] = []
+    private var directory: SessionDirectory?
+    private var loopback: LoopbackListener?
     private var active: SessionDescriptor?
     private var worker: Task<Void, Never>?
     private var seen: [UUID] = []
@@ -47,7 +57,61 @@ public actor AgentHost {
     }
 
     public func start() throws {
-        guard worker == nil else { throw Failure(.conflict, "A bridge is already running or stopping.") }
+        try startUnix(.local)
+    }
+
+    public func start(transport: Transport) async throws {
+        switch transport {
+        case .local:
+            try startUnix(.local)
+        case .appGroup(let id):
+            do { try startUnix(.appGroup(id)) }
+            catch let failure as Failure { throw failure }
+            catch {
+                throw Failure(.sessionExpired, "App Group socket unavailable. Check signing, entitlement, permissions, and Unix socket path length.")
+            }
+        case .pairedLoopback(let folder, let makeIdentity):
+            try checkAvailable()
+            starting = true
+            defer {
+                starting = false
+                for waiter in startupStops { waiter.resume() }
+                startupStops.removeAll()
+            }
+            var descriptor = try makeDescriptor()
+            let directory = try SessionDirectory(id: descriptor.identity.sessionId, source: .pairingDirectory(folder))
+            try directory.create()
+            do {
+                let listener = try LoopbackListener(identity: makeIdentity())
+                loopback = listener
+                do {
+                    descriptor.port = try await listener.start(handle: handler(), reject: { Self.encodeFailure($0) })
+                    try Task.checkCancellation()
+                    guard startupStops.isEmpty else { throw CancellationError() }
+                    descriptor.certificatePin = listener.pin
+                    try directory.publish(descriptor)
+                } catch {
+                    listener.close()
+                    await listener.drain()
+                    loopback = nil
+                    throw error
+                }
+                self.directory = directory
+                active = descriptor
+            } catch {
+                directory.remove()
+                throw error
+            }
+        }
+    }
+
+    private func checkAvailable() throws {
+        guard !starting, worker == nil, loopback == nil else {
+            throw Failure(.conflict, "A bridge is already running or stopping.")
+        }
+    }
+
+    private func makeDescriptor() throws -> SessionDescriptor {
         let id = UUID()
         let bundle = Bundle.main
         guard let bundleId = bundle.bundleIdentifier, let executable = bundle.executableURL,
@@ -63,15 +127,26 @@ public actor AgentHost {
         var secret = Data(count: 32)
         let status = secret.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!) }
         guard status == errSecSuccess else { throw Failure(.internalError, "Credential generation failed.") }
-        let descriptor = SessionDescriptor(
+        return SessionDescriptor(
             identity: SessionIdentity(
                 sessionId: id, bundleId: bundleId, pid: getpid(),
                 launchedAt: launchedAt, buildFingerprint: fingerprint
             ),
             auth: secret.base64EncodedString()
         )
+    }
 
-        let directory = try SessionDirectory(id: id)
+    private func handler() -> @Sendable (Data, DispatchTime) async -> Data {
+        { [weak self] data, acceptedAt in
+            guard let self else { return Self.encodeFailure(Failure(.sessionExpired, "Session ended.")) }
+            return await self.dispatch(data, acceptedAt: acceptedAt)
+        }
+    }
+
+    private func startUnix(_ source: SessionSource) throws {
+        try checkAvailable()
+        let descriptor = try makeDescriptor()
+        let directory = try SessionDirectory(id: descriptor.identity.sessionId, source: source)
         try directory.create()
         do {
             let listener = try LocalListener(path: directory.socketPath)
@@ -82,10 +157,8 @@ public actor AgentHost {
                 throw error
             }
             active = descriptor
-            let handle: @Sendable (Data, DispatchTime) async -> Data = { [weak self] data, acceptedAt in
-                guard let self else { return Self.encodeFailure(Failure(.sessionExpired, "Session ended.")) }
-                return await self.dispatch(data, acceptedAt: acceptedAt)
-            }
+            self.directory = directory
+            let handle = handler()
             worker = Task {
                 await listener.run(handle: handle) { failure in
                     Self.encodeFailure(failure)
@@ -99,17 +172,35 @@ public actor AgentHost {
     }
 
     public func stop() async {
-        guard let worker, let active else { return }
-        self.active = nil
-        try? SessionDirectory(id: active.identity.sessionId).withdraw()
-        worker.cancel()
-        await worker.value
-        self.worker = nil
+        if starting {
+            loopback?.close()
+            await withCheckedContinuation { startupStops.append($0) }
+            return
+        }
+        guard active != nil else { return }
+        active = nil
+        directory?.withdraw()
+        if let loopback {
+            loopback.close()
+            await loopback.drain()
+            directory?.remove()
+            self.loopback = nil
+        }
+        if let worker {
+            worker.cancel()
+            await worker.value
+            self.worker = nil
+        }
+        directory = nil
         seen.removeAll()
         requestsInBucket = 0
     }
 
-    deinit { worker?.cancel() }
+    deinit {
+        worker?.cancel()
+        loopback?.close()
+        if loopback != nil { directory?.remove() }
+    }
 
     private func dispatch(_ data: Data, acceptedAt: DispatchTime) async -> Data {
         var requestId: UUID?

@@ -2,6 +2,7 @@
 """Verify MCP JSON-RPC over stdio against a selected real AgentLab session."""
 import argparse
 import json
+import os
 import select
 import subprocess
 
@@ -10,6 +11,10 @@ parser.add_argument("session_id")
 parser.add_argument("--mcp", default="Tools/MCP/.build/debug/agentdevkit-mcp")
 parser.add_argument("--cli", default=".build/debug/agentdevctl")
 args = parser.parse_args()
+flags = []
+for variable, option in [("AGENTDEVKIT_APP_GROUP", "--app-group"), ("AGENTDEVKIT_PAIRING_DIR", "--pairing-dir")]:
+    if variable in os.environ:
+        flags.extend([option, os.environ[variable]])
 
 with subprocess.Popen(
     [args.mcp], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -37,6 +42,7 @@ with subprocess.Popen(
             "capabilities": {},
         }, 1)
         assert hello["serverInfo"]["name"] == "agentdevkit"
+        assert hello["serverInfo"]["version"] == "0.2.0"
         send("notifications/initialized")
         catalog = {tool["name"]: tool for tool in send("tools/list", request_id=2)["tools"]}
         assert len(catalog) == 11
@@ -58,7 +64,7 @@ with subprocess.Popen(
         assert screen["ready"] is True and screen["fields"]["nodeId"] == "node-42"
         mcp_state = tool("state", 4, scope="current-screen")["structuredContent"]["result"]
         cli_state = json.loads(subprocess.check_output([
-            args.cli, "--session", args.session_id, "state", "--json",
+            args.cli, *flags, "--session", args.session_id, "state", "--json",
         ]))["result"]
         assert screen == mcp_state == cli_state
 

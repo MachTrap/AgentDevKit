@@ -2,7 +2,7 @@
 name: macos-agent-native
 description: Use when integrating AgentDevKit into a SwiftUI or AppKit macOS app, or when reproducing a bug or verifying a feature in a running native app using a test fixture, deep route, or scoped state. Apply when UI setup or distinguishing model state from rendered behavior is part of the task.
 metadata:
-  version: "0.1"
+  version: "0.2.0"
 ---
 
 # Agent-native macOS development

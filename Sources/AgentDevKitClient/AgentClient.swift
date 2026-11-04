@@ -2,15 +2,26 @@ import AgentDevKitCore
 import AgentDevKitTransport
 import Foundation
 
+public typealias SessionSource = AgentDevKitTransport.SessionSource
+
 public struct AgentClient: Sendable {
+    private let source: SessionSource
     private let descriptor: SessionDescriptor
 
     public static func sessions() throws -> [SessionIdentity] {
-        try discover().map(\.identity).sorted { $0.launchedAt < $1.launchedAt }
+        try sessions(source: .local)
+    }
+
+    public static func sessions(source: SessionSource) throws -> [SessionIdentity] {
+        try discover(source).map(\.identity).sorted { $0.launchedAt < $1.launchedAt }
     }
 
     public init(session selector: String? = nil) throws {
-        let all = try Self.discover()
+        try self.init(session: selector, source: .local)
+    }
+
+    public init(session selector: String? = nil, source: SessionSource) throws {
+        let all = try Self.discover(source)
         let matching = if let selector {
             all.filter { $0.identity.sessionId == UUID(uuidString: selector) || $0.identity.bundleId == selector }
         } else {
@@ -26,6 +37,7 @@ public struct AgentClient: Sendable {
             throw Failure(.unsupportedVersion, "Session protocol unsupported.")
         }
         self.descriptor = descriptor
+        self.source = source
     }
 
     public func hello() async throws -> Response<SessionIdentity> {
@@ -45,9 +57,10 @@ public struct AgentClient: Sendable {
         Failure(.appInstanceMismatch, "Response does not match the selected app instance.")
     }
 
-    private static func discover() throws -> [SessionDescriptor] {
-        do { return try SessionDirectory.discover() }
-        catch { throw Failure(.sessionExpired, "Session discovery unavailable.") }
+    private static func discover(_ source: SessionSource) throws -> [SessionDescriptor] {
+        do { return try SessionDirectory.discover(source) }
+        catch let failure as Failure { throw failure }
+        catch { throw Failure(.sessionExpired, "Session discovery unavailable. Check directory access and permissions.") }
     }
 
     public func call<Input, Output>(
@@ -70,11 +83,15 @@ public struct AgentClient: Sendable {
         let request = Request(sessionId: identity.sessionId, auth: descriptor.auth, method: method, params: params, timeoutMs: timeoutMs)
         let data: Data
         do {
-            let directory = try SessionDirectory(id: identity.sessionId)
-            data = try await LocalSocket.exchange(
-                JSONEncoder().encode(request), path: directory.socketPath,
-                expectedPID: identity.pid, timeoutMs: request.timeoutMs
-            )
+            let payload = try JSONEncoder().encode(request)
+            if let port = descriptor.port, let pin = descriptor.certificatePin {
+                data = try await Loopback.exchange(payload, port: port, pin: pin, timeoutMs: timeoutMs)
+            } else {
+                let directory = try SessionDirectory(id: identity.sessionId, source: source)
+                data = try await LocalSocket.exchange(
+                    payload, path: directory.socketPath, expectedPID: identity.pid, timeoutMs: timeoutMs
+                )
+            }
         } catch SocketError.timedOut {
             throw Failure(.timeout, "Bridge did not respond before the deadline.", retryable: true)
         } catch is CancellationError {

@@ -13,13 +13,24 @@ struct AgentLabApp: App {
             #if AGENT_DEVKIT
             WorkspaceView(model: testingSession.model)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Label(testingSession.status, systemImage: "hammer")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(.bar)
-                        .accessibilityIdentifier("status.agent-testing")
+                    HStack {
+                        Label(testingSession.status, systemImage: "hammer")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("status.agent-testing")
+                        Spacer()
+                        #if ADK_LOOPBACK
+                        if testingSession.pairingEnabled {
+                            if testingSession.paired {
+                                Button("Forget Pairing", action: testingSession.forgetPairingFolder)
+                            } else {
+                                Button("Pair Folder…", action: testingSession.choosePairingFolder)
+                            }
+                        }
+                        #endif
+                    }
+                    .padding(10)
+                    .background(.bar)
                 }
             #else
             WorkspaceView(model: model)

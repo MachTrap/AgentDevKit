@@ -44,3 +44,17 @@ import Testing
     server.cancel()
     await server.value
 }
+
+@Test func unixExchangeRejectsUnexpectedPeerPID() async throws {
+    let directory = URL(fileURLWithPath: "/tmp/adk-" + UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let path = directory.appendingPathComponent("s").path
+    let listener = try LocalListener(path: path)
+    defer { listener.close() }
+
+    // The listener belongs to this test process. PID 1 cannot be its peer.
+    await #expect(throws: SocketError.disconnected) {
+        try await LocalSocket.exchange(Data([1]), path: path, expectedPID: 1, timeoutMs: 1_000)
+    }
+}

@@ -2,15 +2,43 @@
 
 AgentDevKit gives coding agents a local, developer-only bridge into a running SwiftUI or AppKit app. Use it to navigate to a screen, load deterministic test data, inspect scoped state, and follow lifecycle events while verifying the UI separately.
 
-The app and CLI target macOS 14+ with Swift 6 and Xcode 16+. The MCP sidecar's pinned dependencies require Swift 6.4.
+The app and CLI target macOS 14+ with Swift 6 and Xcode 16+. The MCP sidecar requires Swift 6.2.
+
+## Install the component you need
+
+The v0.2.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
+
+- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.2.0](https://github.com/MachTrap/AgentDevKit/tree/v0.2.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
+- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.2.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.2.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
+- **CLI only.** Check out the tag and build the executable product. The root package has no external dependencies.
+- **MCP only.** Build the [separate MCP package](#build-the-mcp-sidecar) from the tag. It uses the client libraries directly.
+- **Examples.** Open the Xcode projects from the same tag and choose the Testing scheme described in the example's guide.
+
+```sh
+git clone --branch v0.2.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
+cd AgentDevKit
+swift build -c release --product agentdevctl
+.build/release/agentdevctl --version
+```
+
+## Choose a session source
+
+| Testing app | CLI global options | MCP server environment |
+| --- | --- | --- |
+| Unsandboxed | Default | Default |
+| Same-team App Group | `--app-group TEAMID.adk` | `AGENTDEVKIT_APP_GROUP=TEAMID.adk` |
+| Paired loopback | `--pairing-dir /absolute/private/folder` | `AGENTDEVKIT_PAIRING_DIR=/absolute/private/folder` |
+
+Place CLI options before the command. Configure one source per process. For an App Group, sign the app and both tools with the same team and matching App Group entitlement. For loopback, select an owner-only folder in the Testing app once. The bookmark survives launches and the TLS certificate and bridge credential rotate each session. See the [sandbox setup and verification guide](Examples/AgentLab/README.md#sandboxed-testing).
+
+The wire version remains `agentdevkit/1`.
 
 ## Quick start
 
 From the repository root on macOS:
 
 ```sh
-swift build
-swift test
+swift build --product agentdevctl
 xcodebuild -project Examples/AgentLab/AgentLab.xcodeproj \
   -scheme AgentLab-AgentTesting -destination 'platform=macOS' \
   -derivedDataPath .build/AgentLab build
@@ -53,11 +81,11 @@ Register lifecycle names alongside each new feature. The bridge can then correla
 ## Build the MCP sidecar
 
 ```sh
-swift build --package-path Tools/MCP -c release
-swift build --package-path Tools/MCP -c release --show-bin-path
+swift build --package-path Tools/MCP --force-resolved-versions -c release
+swift build --package-path Tools/MCP --force-resolved-versions -c release --show-bin-path
 ```
 
-Use the absolute path to `agentdevkit-mcp` in your MCP client's stdio server configuration. The process discovers Testing sessions on the same Mac. Run `agentdevkit_session` first and pass the returned session UUID to subsequent tools. The sidecar's locked dependencies currently require Swift 6.4. The app and CLI use a separate Swift 6 package without the MCP SDK.
+Use the absolute path to `agentdevkit-mcp` in your MCP client's stdio server configuration. Set a session source in that configuration when using a sandboxed app. Run `agentdevkit_session` first and pass the returned session UUID to subsequent tools. The sidecar's locked dependencies currently require Swift 6.2. The app and CLI use a separate Swift 6 package without the MCP SDK.
 
 ## Examples and integration
 

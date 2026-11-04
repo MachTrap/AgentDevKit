@@ -4,6 +4,21 @@ import Darwin
 import Foundation
 import MCP
 
+private let sessionSource: SessionSource = {
+    let environment = ProcessInfo.processInfo.environment
+    let group = environment["AGENTDEVKIT_APP_GROUP"]
+    let folder = environment["AGENTDEVKIT_PAIRING_DIR"]
+    switch (group, folder) {
+    case (nil, nil): return .local
+    case (let group?, nil) where !group.isEmpty: return .appGroup(group)
+    case (nil, let folder?) where !folder.isEmpty:
+        return .pairingDirectory(URL(fileURLWithPath: folder, isDirectory: true))
+    default:
+        FileHandle.standardError.write(Data("Configure exactly one nonempty AgentDevKit session source.\n".utf8))
+        exit(2)
+    }
+}()
+
 private struct Endpoint: Sendable {
     let tool: Tool
     let run: @Sendable ([String: Value]) async throws -> CallTool.Result
@@ -75,7 +90,7 @@ private struct Endpoint: Sendable {
             } catch {
                 throw Failure(.invalidParams, "Tool argument types do not match the schema.")
             }
-            return try result(await AgentClient(session: selector).call(command, params, timeoutMs: timeout))
+            return try result(await AgentClient(session: selector, source: sessionSource).call(command, params, timeoutMs: timeout))
         }
     }
 }
@@ -105,12 +120,12 @@ private let context: Value = [
 private let endpoints: [Endpoint] = [
     Endpoint("session", description: "List opted-in native app sessions. With a sessionId, verify that exact live app's identity.") { args in
         if let id = args["sessionId"]?.stringValue {
-            return try result(await AgentClient(session: id).hello())
+            return try result(await AgentClient(session: id, source: sessionSource).hello())
         }
-        return try result(SessionList(ok: true, result: AgentClient.sessions()))
+        return try result(SessionList(ok: true, result: AgentClient.sessions(source: sessionSource)))
     },
     Endpoint("capabilities", description: "Discover the selected session's current methods, permitted routes, fixtures, scopes, and limits.") { args in
-        try result(await AgentClient(session: args["sessionId"]?.stringValue).capabilities())
+        try result(await AgentClient(session: args["sessionId"]?.stringValue, source: sessionSource).capabilities())
     },
     .command("prepare", AppCommands.prepare, description: "Reset isolated Testing data to a named fixture and open a real app screen. Waits for readiness by default. Use external UI checks to verify rendering or clickability.",
              fields: ["fixture": string, "route": string, "context": context, "waitForReady": boolean],
@@ -134,7 +149,7 @@ private let endpoints: [Endpoint] = [
              required: ["actionId", "arguments"], mutating: true, destructive: true)
 ]
 
-let server = Server(name: "agentdevkit", version: "0.1.0", capabilities: .init(tools: .init()))
+let server = Server(name: "agentdevkit", version: "0.2.0", capabilities: .init(tools: .init()))
 await server.withMethodHandler(ListTools.self) { _ in
     .init(tools: endpoints.map(\.tool))
 }

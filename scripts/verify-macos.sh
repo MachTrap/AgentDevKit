@@ -14,9 +14,9 @@ run_swift() {
   fi
 }
 run_swift test
-if [[ ! -x .build/debug/agentdevctl ]]; then
-  run_swift build --product agentdevctl
-fi
+run_swift build -c release --product agentdevctl
+test "$(.build/release/agentdevctl --version)" = 0.2.0
+run_swift build --package-path Tools/MCP --force-resolved-versions -c release --product agentdevkit-mcp
 
 xcodebuild -project "$project" -scheme AgentLab-AgentTesting -destination "$destination" \
   -derivedDataPath "$root/testing" build
