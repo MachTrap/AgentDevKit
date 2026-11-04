@@ -105,8 +105,10 @@ private func result(_ payload: some Codable, isError: Bool = false) throws -> Ca
     encoder.outputFormatting = [.sortedKeys]
     let data = try encoder.encode(payload)
     let value = try JSONDecoder().decode(Value.self, from: data)
-    return .init(content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
-                 structuredContent: Optional(value), isError: isError)
+    // Resolve the SDK's nonthrowing Value initializer consistently across Swift versions.
+    let makeResult: ([Tool.Content], Value?, Bool?, Metadata?) -> CallTool.Result = CallTool.Result.init
+    let content: Tool.Content = .text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)
+    return makeResult([content], value, isError, nil)
 }
 
 private let string: Value = ["type": "string"]
