@@ -110,9 +110,16 @@ public actor AgentHost {
 
     /// Publishes a session at `location`. A paired-loopback folder also needs a fresh
     /// TLS identity for every start; the app must hold the folder's security scope until `stop()`.
+    /// In the App Sandbox, `.local` publishes inside the app's own container (`.appContainer`),
+    /// so a sandboxed Testing build needs no App Group or pairing folder.
     public func start(
-        at location: SessionLocation = .local, loopbackIdentity: (@Sendable () throws -> SecIdentity)? = nil
+        at requested: SessionLocation = .local, loopbackIdentity: (@Sendable () throws -> SecIdentity)? = nil
     ) async throws(AgentHostStartError) {
+        let location: SessionLocation = if requested == .local, let container = SessionDirectory.sandboxContainerID {
+            .appContainer(container)
+        } else {
+            requested
+        }
         guard !starting, worker == nil, loopback == nil, active == nil else { throw .alreadyRunning }
         starting = true
         setState(.starting)
@@ -123,7 +130,7 @@ public actor AgentHost {
         }
         do {
             switch location {
-            case .local, .appGroup:
+            case .local, .appGroup, .appContainer:
                 try startUnix(location)
             case .pairingDirectory(let folder):
                 guard let loopbackIdentity else { throw AgentHostStartError.listenerFailed }
@@ -199,7 +206,7 @@ public actor AgentHost {
             switch location {
             case .appGroup: return .appGroupUnavailable
             case .pairingDirectory: return .pairingFolderInvalid
-            case .local: return .listenerFailed
+            case .local, .appContainer: return .listenerFailed
             }
         default: return .listenerFailed
         }

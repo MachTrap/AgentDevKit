@@ -10,11 +10,13 @@ private let location: SessionLocation = {
     let environment = ProcessInfo.processInfo.environment
     let group = environment["AGENTDEVKIT_APP_GROUP"]
     let folder = environment["AGENTDEVKIT_PAIRING_DIR"]
-    switch (group, folder) {
-    case (nil, nil): return .local
-    case (let group?, nil) where !group.isEmpty: return .appGroup(group)
-    case (nil, let folder?) where !folder.isEmpty:
+    let container = environment["AGENTDEVKIT_CONTAINER"]
+    switch (group, folder, container) {
+    case (nil, nil, nil): return .local
+    case (let group?, nil, nil) where !group.isEmpty: return .appGroup(group)
+    case (nil, let folder?, nil) where !folder.isEmpty:
         return .pairingDirectory(URL(fileURLWithPath: folder, isDirectory: true))
+    case (nil, nil, let container?) where !container.isEmpty: return .appContainer(container)
     default:
         FileHandle.standardError.write(Data("Configure exactly one nonempty AgentDevKit session location.\n".utf8))
         exit(2)

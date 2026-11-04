@@ -28,10 +28,13 @@ swift build -c release --product agentdevctl
 | Testing app (`SessionLocation`) | CLI global options | MCP server environment |
 | --- | --- | --- |
 | Unsandboxed (`.local`) | Default | Default |
+| Sandboxed, own container (`.appContainer`, chosen automatically) | `--session BUNDLE_ID`, or `--container BUNDLE_ID` | `sessionId` = bundle ID, or `AGENTDEVKIT_CONTAINER=BUNDLE_ID` |
 | Same-team App Group (`.appGroup`) | `--app-group TEAMID.adk` | `AGENTDEVKIT_APP_GROUP=TEAMID.adk` |
 | Paired loopback (`.pairingDirectory`) | `--pairing-dir /absolute/private/folder` | `AGENTDEVKIT_PAIRING_DIR=/absolute/private/folder` |
 
-Place CLI options before the command. Configure one location per process. For an App Group, sign the app and both tools with the same team and matching App Group entitlement. For loopback, select an owner-only folder in the Testing app once. The bookmark survives launches and the TLS certificate and bridge credential rotate each session. See the [sandbox setup and verification guide](Examples/AgentLab/README.md#sandboxed-testing).
+Place CLI options before the command. Configure one location per process.
+
+A sandboxed Testing app needs no App Group, team signing or pairing folder. `AgentSession.start(host, readOnly:)` publishes inside the app's own container, and the tools find it from the bundle ID. App Group and paired loopback remain available for tools that must run sandboxed themselves, or when the container path is too long. The socket path must fit in 104 bytes, which allows a bundle ID of about 45 characters with a home folder like `/Users/name`. `session list` does not scan containers, so pass the bundle ID. For an App Group, sign the app and both tools with the same team and matching App Group entitlement. For loopback, select an owner-only folder in the Testing app once. The bookmark survives launches and the TLS certificate and bridge credential rotate each session. See the [sandbox setup and verification guide](Examples/AgentLab/README.md#sandboxed-testing).
 
 `session list` shows each session's protocol version. A v0.2 app or tool reports `UNSUPPORTED_VERSION` (exit 6) with a remedy instead of misbehaving.
 

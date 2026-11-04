@@ -13,7 +13,7 @@ Build the app, the CLI and the MCP sidecar from the same release.
 | v0.3 CLI → v0.2 app | `session list` shows the session as `agentdevkit/1`. Selecting it returns `UNSUPPORTED_VERSION` with `details.remedy`, exit 6 |
 | `agentdevkit/1` frame → v0.3 host | `UNSUPPORTED_VERSION` with `details.supported: ["agentdevkit/2"]` |
 
-Session descriptors, directories and the three session locations are unchanged. A v0.3 descriptor adds a `limits` object.
+Session descriptors and the existing locations are unchanged. A v0.3 descriptor adds a `limits` object. A new `.appContainer` location lets a sandboxed Testing app publish in its own container without an App Group.
 
 ## Swift API
 

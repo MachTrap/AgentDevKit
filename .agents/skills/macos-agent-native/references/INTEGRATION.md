@@ -86,7 +86,7 @@ Use static names, the presentation ID as the work span ID, and the scenario ID a
 
 ## Select a Testing location
 
-- **Unsandboxed:** call `session.start(host, readOnly:)`. This uses `.local`.
+- **Unsandboxed or sandboxed:** call `session.start(host, readOnly:)`. Unsandboxed builds publish at `.local`. In the App Sandbox the host switches to `.appContainer(bundleID)`, a Unix socket inside the app's own container. This needs no extra entitlement, team or folder. Tools find it with `--session BUNDLE_ID`. Keep the bundle ID short (about 45 characters) so the socket path fits in 104 bytes.
 - **Same-team sandbox:** call `session.start(host, at: .appGroup(groupID), readOnly:)`.
   - Sign the Testing app and the tools with the same App Group entitlement.
   - Use a short group ID so the Darwin socket path fits.

@@ -96,7 +96,7 @@ public enum AgentHostStartError: Error, Sendable, Equatable, CustomStringConvert
         case .identityUnavailable: "Application identity unavailable."
         case .appGroupUnavailable: "App Group unavailable. Check the signing team and App Group entitlement."
         case .pairingFolderInvalid: "Pairing folder unavailable. Select an accessible folder owned by you with mode 0700."
-        case .socketPathTooLong: "The session socket path exceeds the Unix socket limit. Use a shorter App Group identifier."
+        case .socketPathTooLong: "The session socket path exceeds the 104-byte Unix socket limit. Use a shorter App Group or bundle identifier."
         case .listenerFailed: "The bridge listener could not start."
         case .cancelled: "Bridge startup was cancelled."
         }

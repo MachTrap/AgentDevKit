@@ -53,7 +53,7 @@ Use `observe` when you need both state and changes:
 - `action invoke --revision` fails with `STALE_REVISION` when app state moved. Read fresh state before retrying.
 - A repeated request ID returns the original response and does not run the command again.
 
-For a sandboxed session, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
+For a sandboxed app that publishes in its own container, select it by bundle ID with `--session BUNDLE_ID`, or put `--container BUNDLE_ID` before the command. `session list` does not scan containers. For App Group or paired loopback sessions, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
 
 ## MCP
 
@@ -63,7 +63,7 @@ Build with `swift build --package-path Tools/MCP --force-resolved-versions -c re
 claude mcp add agentdevkit -- /absolute/path/to/agentdevkit-mcp
 ```
 
-For sandboxed sessions, set either `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` in the server environment. Stdout carries only MCP frames.
+For a container session, pass the bundle ID as `sessionId` or set `AGENTDEVKIT_CONTAINER`. For App Group or loopback sessions, set `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` in the server environment. Stdout carries only MCP frames.
 
 Call `agentdevkit_session` first, then pass a `sessionId` (UUID or unique bundle ID) to the other tools as needed:
 

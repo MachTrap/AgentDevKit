@@ -7,7 +7,8 @@ let usage: String = {
     var lines = [
         "Usage:",
         "  agentdevctl --version",
-        "  Global options (before the command): --session ID_OR_BUNDLE · --app-group ID | --pairing-dir PATH",
+        "  Global options (before the command): --session ID_OR_BUNDLE · --app-group ID | --pairing-dir PATH | --container BUNDLE_ID",
+        "  A bundle ID passed to --session also finds a sandboxed app's session in its own container.",
         "  agentdevctl session list [--json]",
         "  agentdevctl [--session ID_OR_BUNDLE] session ping [--json]",
         "  agentdevctl [--session ID_OR_BUNDLE] capabilities [--json]"
@@ -37,7 +38,7 @@ do {
     var selector: String?
     var location: SessionLocation = .local
     var locationSet = false
-    while let option = arguments.first, ["--session", "--app-group", "--pairing-dir"].contains(option) {
+    while let option = arguments.first, ["--session", "--app-group", "--pairing-dir", "--container"].contains(option) {
         guard arguments.count >= 2, !arguments[1].isEmpty, !arguments[1].hasPrefix("--") else {
             throw Failure(.invalidParams, "Missing value for \(option).")
         }
@@ -48,7 +49,11 @@ do {
         } else {
             guard !locationSet else { throw Failure(.invalidParams, "Select one session location.") }
             locationSet = true
-            location = option == "--app-group" ? .appGroup(value) : .pairingDirectory(URL(fileURLWithPath: value, isDirectory: true))
+            location = switch option {
+            case "--app-group": .appGroup(value)
+            case "--container": .appContainer(value)
+            default: .pairingDirectory(URL(fileURLWithPath: value, isDirectory: true))
+            }
         }
         arguments.removeFirst(2)
     }

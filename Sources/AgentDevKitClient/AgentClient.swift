@@ -21,12 +21,15 @@ public struct AgentClient: Sendable {
     }
 
     /// Selects one live session by exact session UUID or bundle ID. Without a selector, exactly one session must exist.
+    /// At `.local`, a bundle ID that matches no unsandboxed session is also looked up in that app's own
+    /// sandbox container, so sandboxed Testing builds need no extra configuration.
     public init(session selector: String? = nil, at location: SessionLocation = .local) throws {
-        let all = try Self.discover(location)
-        let matching = if let selector {
-            all.filter { $0.identity.sessionId == UUID(uuidString: selector) || $0.identity.bundleId == selector }
-        } else {
-            all
+        var location = location
+        var matching = try Self.matching(selector, in: Self.discover(location))
+        if matching.isEmpty, location == .local, let selector, UUID(uuidString: selector) == nil {
+            let container = SessionLocation.appContainer(selector)
+            matching = try Self.matching(selector, in: Self.discover(container))
+            if !matching.isEmpty { location = container }
         }
         guard let descriptor = matching.first else {
             throw Failure(.sessionNotFound, "No matching live session.",
@@ -41,6 +44,11 @@ public struct AgentClient: Sendable {
         }
         self.descriptor = descriptor
         self.location = location
+    }
+
+    private static func matching(_ selector: String?, in all: [SessionDescriptor]) -> [SessionDescriptor] {
+        guard let selector else { return all }
+        return all.filter { $0.identity.sessionId == UUID(uuidString: selector) || $0.identity.bundleId == selector }
     }
 
     static func versionMismatch(_ sessionProtocol: String) -> Failure {

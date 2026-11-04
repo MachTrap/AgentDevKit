@@ -24,6 +24,8 @@ parser.add_argument("--cli", default=".build/debug/agentdevctl")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--app-group")
 source.add_argument("--pairing-dir", type=Path)
+source.add_argument("--container", help="Bundle ID of a sandboxed Testing app that publishes in its own container")
+parser.add_argument("--bundle", help="Expected bundle ID, when it differs from the default for the location")
 args = parser.parse_args()
 session_id = str(args.session_id).upper()
 flags = []
@@ -31,6 +33,8 @@ if args.app_group:
     flags = ["--app-group", args.app_group]
 elif args.pairing_dir:
     flags = ["--pairing-dir", str(args.pairing_dir)]
+elif args.container:
+    flags = ["--container", args.container]
 cli = [args.cli, *flags, "--session", session_id]
 identity = json.loads(subprocess.check_output(cli + ["session", "ping", "--json"]))["result"]
 bundle = "dev.agentdevkit.AgentTesting"
@@ -38,7 +42,7 @@ if args.app_group:
     bundle = "dev.agentdevkit.AgentLab.AppGroupTesting"
 elif args.pairing_dir:
     bundle = "dev.agentdevkit.AgentLab.LoopbackTesting"
-assert identity["bundleId"] == bundle
+assert identity["bundleId"] == (args.bundle or args.container or bundle)
 capabilities = json.loads(subprocess.check_output(cli + ["capabilities", "--json"]))["result"]
 assert capabilities["app"] == identity
 assert capabilities["readOnly"]
@@ -52,6 +56,8 @@ if args.app_group:
     directory = Path.home() / "Library" / "Group Containers" / args.app_group / "a" / session_id.replace("-", "")[:16]
 elif args.pairing_dir:
     directory = args.pairing_dir / "adk" / session_id
+elif args.container:
+    directory = Path.home() / "Library" / "Containers" / args.container / "Data" / "a" / session_id.replace("-", "")[:16]
 else:
     temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"], text=True).strip())
     directory = temp / "adk" / session_id
