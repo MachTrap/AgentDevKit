@@ -1,0 +1,68 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+        000000000000000000000030 /* LabRuntime.swift */ = { isa = PBXFileReference; path = "AgentIntegration/LabRuntime.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+        000000000000000000000031 /* LabRuntime.swift in Sources */ = { isa = PBXBuildFile; fileRef = 000000000000000000000030; };
+		000000000000000000000026 /* UITestSource */ = { isa = PBXFileReference; path = "AgentLabUITests/WorkspaceTests.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000027 /* UITestBuildFile */ = { isa = PBXBuildFile; fileRef = 000000000000000000000026; };
+		000000000000000000000028 /* UITestProduct */ = { isa = PBXFileReference; path = "AgentLabUITests.xctest"; explicitFileType = wrapper.cfbundle; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000029 /* UITestSources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (000000000000000000000027,); };
+		00000000000000000000002A /* UITestConfig */ = { isa = XCConfigurationList; defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; buildConfigurations = (00000000000000000000002B, 00000000000000000000002C,); };
+		00000000000000000000002D /* UITestDependency */ = { isa = PBXTargetDependency; target = 000000000000000000000018; targetProxy = 00000000000000000000002E; };
+		00000000000000000000002E /* UITestProxy */ = { isa = PBXContainerItemProxy; containerPortal = 00000000000000000000001E; proxyType = 1; remoteGlobalIDString = 000000000000000000000018; remoteInfo = "AgentLab-AgentTesting"; };
+		00000000000000000000002F /* AgentLabUITests */ = { isa = PBXNativeTarget; name = AgentLabUITests; productName = AgentLabUITests; productReference = 000000000000000000000028; productType = "com.apple.product-type.bundle.ui-testing"; buildConfigurationList = 00000000000000000000002A; buildPhases = (000000000000000000000029,); buildRules = (); dependencies = (00000000000000000000002D,); };
+		00000000000000000000002B /* UITestDebug */ = { isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = dev.agentdevkit.AgentLabUITests; PRODUCT_NAME = AgentLabUITests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; TEST_TARGET_NAME = "AgentLab-AgentTesting";}; };
+		00000000000000000000002C /* UITestRelease */ = { isa = XCBuildConfiguration; name = Release; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = dev.agentdevkit.AgentLabUITests; PRODUCT_NAME = AgentLabUITests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; TEST_TARGET_NAME = "AgentLab-AgentTesting";}; };
+		00000000000000000000001F = { isa = PBXFileReference; path = "AgentLab/Workspace.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000020 = { isa = PBXBuildFile; fileRef = 00000000000000000000001F; };
+		000000000000000000000022 = { isa = PBXFileReference; path = "AgentIntegration/TestingWorkspace.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000023 = { isa = PBXBuildFile; fileRef = 000000000000000000000022; };
+		000000000000000000000024 = { isa = PBXFileReference; path = "AgentIntegration/LabCommands.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000025 = { isa = PBXBuildFile; fileRef = 000000000000000000000024; };
+		000000000000000000000021 = { isa = PBXBuildFile; fileRef = 00000000000000000000001F; };
+		000000000000000000000001 /* AppFile */ = { isa = PBXFileReference; path = "AgentLab/AgentLabApp.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000002 /* IntegrationFile */ = { isa = PBXFileReference; path = "AgentIntegration/TestingSession.swift"; explicitFileType = sourcecode.swift; sourceTree = "<group>"; };
+		000000000000000000000003 /* LocalPackage */ = { isa = XCLocalSwiftPackageReference; relativePath = ../..; };
+		000000000000000000000004 /* PackageProduct */ = { isa = XCSwiftPackageProductDependency; package = 000000000000000000000003; productName = AgentDevKitHost; };
+		000000000000000000000005 /* AgentLabProduct */ = { isa = PBXFileReference; path = "AgentLab.app"; explicitFileType = wrapper.application; sourceTree = "BUILT_PRODUCTS_DIR"; };
+		000000000000000000000006 /* AgentLabConfigDbg */ = { isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AgentLab"; PRODUCT_NAME = "AgentLab"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; ENABLE_APP_SANDBOX = NO; MARKETING_VERSION = 0.1; CURRENT_PROJECT_VERSION = 1;}; };
+		000000000000000000000007 /* AgentLabConfigRel */ = { isa = XCBuildConfiguration; name = Release; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AgentLab"; PRODUCT_NAME = "AgentLab"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; ENABLE_APP_SANDBOX = NO; MARKETING_VERSION = 0.1; CURRENT_PROJECT_VERSION = 1;}; };
+		000000000000000000000008 /* AgentLabConfig */ = { isa = XCConfigurationList; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; buildConfigurations = (000000000000000000000006, 000000000000000000000007,); };
+		000000000000000000000009 /* AgentLabApp */ = { isa = PBXBuildFile; fileRef = 000000000000000000000001; };
+		00000000000000000000000A /* AgentLabSources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (000000000000000000000009, 000000000000000000000020,); };
+		00000000000000000000000B /* AgentLabFrameworks */ = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (); };
+		00000000000000000000000C /* AgentLabResources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (); };
+		00000000000000000000000D /* AgentLab */ = { isa = PBXNativeTarget; name = "AgentLab"; productName = "AgentLab"; productReference = 000000000000000000000005; productType = "com.apple.product-type.application"; buildConfigurationList = 000000000000000000000008; buildPhases = (00000000000000000000000A, 00000000000000000000000B, 00000000000000000000000C,); buildRules = (); dependencies = (); packageProductDependencies = (); };
+		00000000000000000000000E /* AgentTestingProduct */ = { isa = PBXFileReference; path = "AgentLab-AgentTesting.app"; explicitFileType = wrapper.application; sourceTree = "BUILT_PRODUCTS_DIR"; };
+		00000000000000000000000F /* AgentTestingConfigDbg */ = { isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AgentTesting"; PRODUCT_NAME = "AgentLab-AgentTesting"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; ENABLE_APP_SANDBOX = NO; MARKETING_VERSION = 0.1; CURRENT_PROJECT_VERSION = 1;SWIFT_ACTIVE_COMPILATION_CONDITIONS = AGENT_DEVKIT;}; };
+		000000000000000000000010 /* AgentTestingConfigRel */ = { isa = XCBuildConfiguration; name = Release; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AgentTesting"; PRODUCT_NAME = "AgentLab-AgentTesting"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_IDENTITY = "-"; ENABLE_APP_SANDBOX = NO; MARKETING_VERSION = 0.1; CURRENT_PROJECT_VERSION = 1;}; };
+		000000000000000000000011 /* AgentTestingConfig */ = { isa = XCConfigurationList; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; buildConfigurations = (00000000000000000000000F, 000000000000000000000010,); };
+		000000000000000000000012 /* AgentTestingApp */ = { isa = PBXBuildFile; fileRef = 000000000000000000000001; };
+		000000000000000000000013 /* AgentTestingIntegration */ = { isa = PBXBuildFile; fileRef = 000000000000000000000002; };
+		000000000000000000000014 /* AgentTestingHost */ = { isa = PBXBuildFile; productRef = 000000000000000000000004; };
+		000000000000000000000015 /* AgentTestingSources */ = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (000000000000000000000012, 000000000000000000000013, 000000000000000000000021, 000000000000000000000023, 000000000000000000000025, 000000000000000000000031,); };
+		000000000000000000000016 /* AgentTestingFrameworks */ = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (000000000000000000000014,); };
+		000000000000000000000017 /* AgentTestingResources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; runOnlyForDeploymentPostprocessing = 0; files = (); };
+		000000000000000000000018 /* AgentTesting */ = { isa = PBXNativeTarget; name = "AgentLab-AgentTesting"; productName = "AgentLab-AgentTesting"; productReference = 00000000000000000000000E; productType = "com.apple.product-type.application"; buildConfigurationList = 000000000000000000000011; buildPhases = (000000000000000000000032, 000000000000000000000015, 000000000000000000000016, 000000000000000000000017,); buildRules = (); dependencies = (); packageProductDependencies = (000000000000000000000004,); };
+		000000000000000000000019 /* ProjectConfigDbg */ = { isa = XCBuildConfiguration; name = Debug; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 6.0;ONLY_ACTIVE_ARCH = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; DEBUG_INFORMATION_FORMAT = dwarf;}; };
+		00000000000000000000001A /* ProjectConfigRel */ = { isa = XCBuildConfiguration; name = Release; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 6.0;SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";}; };
+		00000000000000000000001B /* ProjectConfig */ = { isa = XCConfigurationList; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; buildConfigurations = (000000000000000000000019, 00000000000000000000001A,); };
+		00000000000000000000001C /* Products */ = { isa = PBXGroup; sourceTree = "<group>"; children = (000000000000000000000005, 00000000000000000000000E, 000000000000000000000028,); };
+		00000000000000000000001D /* MainGroup */ = { isa = PBXGroup; sourceTree = "<group>"; children = (000000000000000000000001, 00000000000000000000001F, 000000000000000000000002, 000000000000000000000022, 000000000000000000000024, 000000000000000000000026, 000000000000000000000030, 00000000000000000000001C,); };
+		00000000000000000000001E /* Project */ = { isa = PBXProject; attributes = { LastUpgradeCheck = 1600; TargetAttributes = { 00000000000000000000002F = { TestTargetID = 000000000000000000000018; }; }; }; buildConfigurationList = 00000000000000000000001B; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = 00000000000000000000001D; productRefGroup = 00000000000000000000001C; projectDirPath = ""; projectRoot = ""; targets = (00000000000000000000000D, 000000000000000000000018, 00000000000000000000002F); packageReferences = (000000000000000000000003); };
+        000000000000000000000032 /* Reject shipping configurations */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            name = "Require Debug configuration";
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "if [ \"$CONFIGURATION\" != Debug ]; then\n    echo \"error: AgentLab-AgentTesting can only build in Debug configuration. Use AgentLab-Release for shipping.\" >&2\n    exit 1\nfi\n";
+        };
+	};
+	rootObject = 00000000000000000000001E;
+}

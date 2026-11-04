@@ -1,0 +1,34 @@
+# macOS and local editor settings
+.DS_Store
+xcuserdata/
+*.xcuserstate
+/.codex/
+/.aws/
+
+# SwiftPM and Xcode build products
+.build/
+.swiftpm/
+DerivedData/
+*.xcresult/
+*.xcarchive/
+*.dSYM/
+*.ipa
+
+# Local test and script output
+__pycache__/
+*.py[cod]
+.venv/
+*.log
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+!.env.sample
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+
+#Other
+docs/

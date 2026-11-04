@@ -1,0 +1,23 @@
+{
+  "skill_name": "macos-agent-native",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The Inspector title in AgentLab seems clipped with long names. Reproduce it in the running Testing app and tell me what the model and actual window each show.",
+      "expected_output": "Selects a verified live session, discovers the long-name fixture and Inspector route, uses composed setup, compares scoped state to a real capture or accessibility observation, and reports missing UI evidence explicitly.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Add a safe development bridge to this existing AppKit app so I can inspect the selected document while it runs. Start read-only.",
+      "expected_output": "Registers a main-actor snapshot of the real coordinator, links the package only in a dedicated Testing target, uses explicit activation, builds Testing and Release, and verifies identity and Release exclusion where the environment supports it.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "The AgentDevKit CLI shows no sessions after my app relaunched. I still need to verify that the Appearance menu opens.",
+      "expected_output": "Checks the current target and opt-in without weakening authentication or selecting a stale session. Uses actual UI input through XCUITest or accessibility to verify the navigation path, or reports the exact missing verification.",
+      "files": []
+    }
+  ]
+}

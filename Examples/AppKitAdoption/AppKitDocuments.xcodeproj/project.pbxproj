@@ -1,0 +1,40 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+		000000000000000000000001 /* DocumentApp.swift */ = { isa = "PBXFileReference"; lastKnownFileType = "sourcecode.swift"; path = "DocumentApp.swift"; sourceTree = "<group>"; };
+		000000000000000000000002 /* TestingBridge.swift */ = { isa = "PBXFileReference"; lastKnownFileType = "sourcecode.swift"; path = "TestingBridge.swift"; sourceTree = "<group>"; };
+		000000000000000000000003 /* XCLocalSwiftPackageReference */ = { isa = "XCLocalSwiftPackageReference"; relativePath = "../.."; };
+		000000000000000000000004 /* AppKitDocuments.app */ = { isa = "PBXFileReference"; explicitFileType = "wrapper.application"; path = "AppKitDocuments.app"; sourceTree = "BUILT_PRODUCTS_DIR"; };
+		000000000000000000000005 /* PBXBuildFile */ = { isa = "PBXBuildFile"; fileRef = "000000000000000000000001"; };
+		000000000000000000000006 /* PBXSourcesBuildPhase */ = { isa = "PBXSourcesBuildPhase"; buildActionMask = 2147483647; files = ("000000000000000000000005"); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000000007 /* PBXFrameworksBuildPhase */ = { isa = "PBXFrameworksBuildPhase"; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000000008 /* Debug */ = { isa = "XCBuildConfiguration"; name = "Debug"; buildSettings = { CODE_SIGN_IDENTITY = "-"; GENERATE_INFOPLIST_FILE = "YES"; PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AppKitDocuments"; PRODUCT_NAME = "AppKitDocuments"; }; };
+		000000000000000000000009 /* Release */ = { isa = "XCBuildConfiguration"; name = "Release"; buildSettings = { CODE_SIGN_IDENTITY = "-"; GENERATE_INFOPLIST_FILE = "YES"; PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AppKitDocuments"; PRODUCT_NAME = "AppKitDocuments"; }; };
+		00000000000000000000000A /* XCConfigurationList */ = { isa = "XCConfigurationList"; buildConfigurations = ("000000000000000000000008", "000000000000000000000009"); defaultConfigurationName = "Release"; defaultConfigurationIsVisible = 0; };
+		00000000000000000000000B /* AppKitDocuments */ = { isa = "PBXNativeTarget"; buildConfigurationList = "00000000000000000000000A"; buildPhases = ("000000000000000000000006", "000000000000000000000007"); buildRules = (); dependencies = (); name = "AppKitDocuments"; productName = "AppKitDocuments"; packageProductDependencies = (); productReference = "000000000000000000000004"; productType = "com.apple.product-type.application"; };
+		00000000000000000000000C /* AppKitDocuments-AgentTesting.app */ = { isa = "PBXFileReference"; explicitFileType = "wrapper.application"; path = "AppKitDocuments-AgentTesting.app"; sourceTree = "BUILT_PRODUCTS_DIR"; };
+		00000000000000000000000D /* AgentDevKitCore */ = { isa = "XCSwiftPackageProductDependency"; package = "000000000000000000000003"; productName = "AgentDevKitCore"; };
+		00000000000000000000000E /* AgentDevKitHost */ = { isa = "XCSwiftPackageProductDependency"; package = "000000000000000000000003"; productName = "AgentDevKitHost"; };
+		00000000000000000000000F /* Require Debug */ = { isa = "PBXShellScriptBuildPhase"; name = "Require Debug"; alwaysOutOfDate = 1; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; shellPath = "/bin/sh"; shellScript = "test \"$CONFIGURATION\" = Debug || { echo \"error: Testing requires Debug\" >&2; exit 1; }\n"; };
+		000000000000000000000010 /* PBXBuildFile */ = { isa = "PBXBuildFile"; fileRef = "000000000000000000000001"; };
+		000000000000000000000011 /* PBXBuildFile */ = { isa = "PBXBuildFile"; fileRef = "000000000000000000000002"; };
+		000000000000000000000012 /* PBXSourcesBuildPhase */ = { isa = "PBXSourcesBuildPhase"; buildActionMask = 2147483647; files = ("000000000000000000000010", "000000000000000000000011"); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000000013 /* PBXBuildFile */ = { isa = "PBXBuildFile"; productRef = "00000000000000000000000D"; };
+		000000000000000000000014 /* PBXBuildFile */ = { isa = "PBXBuildFile"; productRef = "00000000000000000000000E"; };
+		000000000000000000000015 /* PBXFrameworksBuildPhase */ = { isa = "PBXFrameworksBuildPhase"; buildActionMask = 2147483647; files = ("000000000000000000000013", "000000000000000000000014"); runOnlyForDeploymentPostprocessing = 0; };
+		000000000000000000000016 /* Debug */ = { isa = "XCBuildConfiguration"; name = "Debug"; buildSettings = { CODE_SIGN_IDENTITY = "-"; GENERATE_INFOPLIST_FILE = "YES"; PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AppKitDocuments.Testing"; PRODUCT_NAME = "AppKitDocuments-AgentTesting"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "AGENT_DEVKIT"; }; };
+		000000000000000000000017 /* Release */ = { isa = "XCBuildConfiguration"; name = "Release"; buildSettings = { CODE_SIGN_IDENTITY = "-"; GENERATE_INFOPLIST_FILE = "YES"; PRODUCT_BUNDLE_IDENTIFIER = "dev.agentdevkit.AppKitDocuments.Testing"; PRODUCT_NAME = "AppKitDocuments-AgentTesting"; }; };
+		000000000000000000000018 /* XCConfigurationList */ = { isa = "XCConfigurationList"; buildConfigurations = ("000000000000000000000016", "000000000000000000000017"); defaultConfigurationName = "Release"; defaultConfigurationIsVisible = 0; };
+		000000000000000000000019 /* AppKitDocuments-AgentTesting */ = { isa = "PBXNativeTarget"; buildConfigurationList = "000000000000000000000018"; buildPhases = ("00000000000000000000000F", "000000000000000000000012", "000000000000000000000015"); buildRules = (); dependencies = (); name = "AppKitDocuments-AgentTesting"; productName = "AppKitDocuments-AgentTesting"; packageProductDependencies = ("00000000000000000000000D", "00000000000000000000000E"); productReference = "00000000000000000000000C"; productType = "com.apple.product-type.application"; };
+		00000000000000000000001A /* Products */ = { isa = "PBXGroup"; children = ("000000000000000000000004", "00000000000000000000000C"); name = "Products"; sourceTree = "<group>"; };
+		00000000000000000000001B /* PBXGroup */ = { isa = "PBXGroup"; children = ("000000000000000000000001", "000000000000000000000002", "00000000000000000000001A"); sourceTree = "<group>"; };
+		00000000000000000000001C /* Debug */ = { isa = "XCBuildConfiguration"; name = "Debug"; buildSettings = { SDKROOT = "macosx"; SWIFT_VERSION = "6.0"; MACOSX_DEPLOYMENT_TARGET = "14.0"; ONLY_ACTIVE_ARCH = "YES"; ALWAYS_SEARCH_USER_PATHS = "NO"; }; };
+		00000000000000000000001D /* Release */ = { isa = "XCBuildConfiguration"; name = "Release"; buildSettings = { SDKROOT = "macosx"; SWIFT_VERSION = "6.0"; MACOSX_DEPLOYMENT_TARGET = "14.0"; ONLY_ACTIVE_ARCH = "YES"; ALWAYS_SEARCH_USER_PATHS = "NO"; }; };
+		00000000000000000000001E /* XCConfigurationList */ = { isa = "XCConfigurationList"; buildConfigurations = ("00000000000000000000001C", "00000000000000000000001D"); defaultConfigurationName = "Release"; defaultConfigurationIsVisible = 0; };
+		00000000000000000000001F /* PBXProject */ = { isa = "PBXProject"; buildConfigurationList = "00000000000000000000001E"; mainGroup = "00000000000000000000001B"; productRefGroup = "00000000000000000000001A"; targets = ("00000000000000000000000B", "000000000000000000000019"); compatibilityVersion = "Xcode 15.0"; developmentRegion = "en"; knownRegions = ("en"); packageReferences = ("000000000000000000000003"); projectDirPath = ""; projectRoot = ""; };
+	};
+	rootObject = 00000000000000000000001F;
+}
