@@ -25,14 +25,17 @@ xcodebuild -project "$project" -scheme AgentLab-Release -destination "$destinati
 xcodebuild -project "$project" -scheme AgentLab-Release -destination "$destination" \
   -derivedDataPath "$root/release" -showBuildSettings -json > "$root/release/settings.json"
 
-log="$root/release/testing-release.log"
-if xcodebuild -project "$project" -scheme AgentLab-AgentTesting -configuration Release \
-  -destination "$destination" -derivedDataPath "$root/rejected" build > "$log" 2>&1; then
-  cat "$log"
-  exit 1
-fi
-grep -F 'AgentLab-AgentTesting can only build in Debug configuration' "$log"
-test ! -e "$root/rejected/Build/Products/Release/AgentLab-AgentTesting.app/Contents/MacOS/AgentLab-AgentTesting"
+for lane in AgentTesting AppGroupTesting LoopbackTesting; do
+  scheme="AgentLab-$lane"
+  log="$root/release/$scheme-release.log"
+  if xcodebuild -project "$project" -scheme "$scheme" -configuration Release \
+    -destination "$destination" -derivedDataPath "$root/rejected" build > "$log" 2>&1; then
+    cat "$log"
+    exit 1
+  fi
+  grep -F "$scheme can only build in Debug configuration" "$log"
+  test ! -e "$root/rejected/Build/Products/Release/$scheme.app/Contents/MacOS/$scheme"
+done
 
 python3 scripts/check-release.py \
   --release "$root/release/Build/Products/Release/AgentLab.app" \
