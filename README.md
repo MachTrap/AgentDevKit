@@ -2,7 +2,7 @@
 
 AgentDevKit gives coding agents a local, developer-only bridge into a running SwiftUI or AppKit app. Use it to navigate to a screen, load deterministic test data, inspect scoped state, and follow lifecycle events while verifying the UI separately.
 
-The app and CLI target macOS 14+ with Swift 6 and Xcode 16+. The MCP sidecar requires Swift 6.2.
+The package and examples target macOS 14 and later. Use Swift 6 for the package and CLI. The loopback example requires Xcode 26 or later, and the MCP sidecar requires Swift 6.2.
 
 ## Install the component you need
 

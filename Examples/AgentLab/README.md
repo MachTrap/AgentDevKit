@@ -57,7 +57,7 @@ Set `AGENTDEVKIT_APP_GROUP` to that group and use the signed sidecar's absolute 
 
 ### Paired loopback
 
-Use `AgentLab-LoopbackTesting`. Its entitlements allow incoming connections and access to a selected folder. It generates a fresh development identity in memory using the example's separate [DevelopmentIdentity package](DevelopmentIdentity/Package.swift). Tools can use their usual signatures and need no App Group entitlement.
+Use `AgentLab-LoopbackTesting` with Xcode 26 or later. Its identity generator uses the public Security SDK declaration of `SecIdentityCreate`. Its entitlements allow incoming connections and access to a selected folder. It generates a fresh development identity in memory using the example's separate [DevelopmentIdentity package](DevelopmentIdentity/Package.swift). Tools can use their usual signatures and need no App Group entitlement.
 
 ```sh
 mkdir -m 700 "$HOME/AgentDevKitPairing"
