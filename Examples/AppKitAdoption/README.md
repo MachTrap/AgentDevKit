@@ -24,4 +24,4 @@ open -n "$PWD/.build/AppKitAdoption/Build/Products/Debug/AppKitDocuments-AgentTe
 .build/debug/agentdevctl --session dev.agentdevkit.AppKitDocuments.Testing state --scope selected-document --json
 ```
 
-The adapter exposes only a document ID and selection revision. It has no fixture or action command and does not open windows when taking a snapshot. For integration in another app, copy the target separation and delegate wiring, and adapt the read-only scope to the app's existing model.
+`TestingBridge.swift` is a 31-line `AgentAdapter`: one `snapshot(scope:)`, an `AgentRuntime.record` call from the controller's selection callback, and an `AgentSession` that handles opt-in and graceful termination. The library serves state, observe, events, diagnostics and waits. The adapter exposes only a document ID, has no fixture or action, and does not open windows when taking a snapshot. For integration in another app, copy the target separation and delegate wiring, and adapt the read-only scope to the app's existing model.

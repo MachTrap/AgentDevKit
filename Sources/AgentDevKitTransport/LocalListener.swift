@@ -2,26 +2,45 @@ import AgentDevKitCore
 import Darwin
 import Dispatch
 import Foundation
+import os
+
+/// Per-connection bounds shared by the Unix and loopback listeners.
+package struct ListenerLimits: Sendable {
+    package var connections: Int
+    package var maxRequestBytes: Int
+    package var readTimeoutMs: Int
+    /// Upper bound for one connection, from accept to the written response.
+    package var connectionTimeoutMs: Int
+
+    package init(connections: Int = 4, maxRequestBytes: Int = Wire.maxRequestBytes, readTimeoutMs: Int = Wire.maxTimeoutMs,
+                 connectionTimeoutMs: Int = Wire.maxTimeoutMs) {
+        self.connections = connections
+        self.maxRequestBytes = maxRequestBytes
+        self.readTimeoutMs = readTimeoutMs
+        self.connectionTimeoutMs = connectionTimeoutMs
+    }
+}
 
 /// The host owns this listener and runs it once. The descriptor is closed
 /// after the structured worker group exits, so a worker cannot poll a reused fd.
 package struct LocalListener: Sendable {
-    package static let concurrentConnections = 4
-
+    private static let log = Logger(subsystem: "dev.agentdevkit", category: "transport")
     private let socket: Int32
+    private let limits: ListenerLimits
 
-    package init(path: String) throws {
+    package init(path: String, limits: ListenerLimits = ListenerLimits()) throws {
         let socket = try LocalSocket.makeSocket()
         do {
             guard try LocalSocket.withAddress(path, { Darwin.bind(socket, $0, $1) }) == 0,
                   chmod(path, 0o600) == 0,
-                  Darwin.listen(socket, Int32(Self.concurrentConnections)) == 0
+                  Darwin.listen(socket, Int32(limits.connections)) == 0
             else { throw SocketError.system }
         } catch {
             Darwin.close(socket)
             throw error
         }
         self.socket = socket
+        self.limits = limits
     }
 
     package func close() {
@@ -34,7 +53,7 @@ package struct LocalListener: Sendable {
     ) async {
         defer { close() }
         await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<Self.concurrentConnections {
+            for _ in 0..<limits.connections {
                 group.addTask {
                     await serveConnections(handle: handle, reject: reject)
                 }
@@ -70,15 +89,19 @@ package struct LocalListener: Sendable {
         defer { Darwin.close(peer) }
         guard !Task.isCancelled else { return }
         let acceptedAt = DispatchTime.now()
-        let deadline = acceptedAt + .milliseconds(Wire.maxTimeoutMs)
+        let deadline = acceptedAt + .milliseconds(limits.connectionTimeoutMs)
+        let readTimeout = DispatchTimeInterval.milliseconds(limits.readTimeoutMs)
+        let maxRequestBytes = limits.maxRequestBytes
         do {
             try LocalSocket.configure(peer)
             try LocalSocket.verifyPeer(peer)
 
             let response: Data
             do {
+                // The read budget starts when an I/O thread begins reading, not when the
+                // connection was accepted, so queueing delay never penalizes a prompt client.
                 let payload = try await LocalSocket.offload {
-                    try LocalSocket.readFrame(peer, maxBytes: Wire.maxRequestBytes, until: deadline)
+                    try LocalSocket.readFrame(peer, maxBytes: maxRequestBytes, until: min(.now() + readTimeout, deadline))
                 }
                 guard !Task.isCancelled else { return }
                 guard let reply = await handleWhileConnected(peer, payload: payload, acceptedAt: acceptedAt, handle: handle) else { return }
@@ -89,8 +112,13 @@ package struct LocalListener: Sendable {
                 response = reject(Failure(.invalidParams, "Request frame is empty."))
             }
 
-            try await LocalSocket.offload {
-                try LocalSocket.writeFrame(response, to: peer, until: deadline)
+            do {
+                try await LocalSocket.offload {
+                    try LocalSocket.writeFrame(response, to: peer, until: deadline)
+                }
+            } catch {
+                // The host bounds response size, so a write failure means the peer stalled or left.
+                Self.log.info("response write failed: \(String(describing: error), privacy: .public)")
             }
         } catch {
             // A stalled, interrupted or foreign peer owns only this connection.

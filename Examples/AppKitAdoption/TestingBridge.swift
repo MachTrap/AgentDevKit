@@ -2,41 +2,30 @@ import AgentDevKitCore
 import AgentDevKitHost
 import AppKit
 
+/// A read-only bridge over the existing window controller. Testing target only.
 @MainActor
-final class TestingBridge {
-    private var host: AgentHost?
-    private var startup: Task<Void, Never>?
+final class TestingBridge: AgentAdapter {
+    private let session = AgentSession()
+    private let runtime = AgentRuntime()
+    private weak var controller: DocumentWindowController?
 
     func start(controller: DocumentWindowController) {
-        guard CommandLine.arguments.contains("--enable-agentdevkit"), host == nil else { return }
-        let scope = "selected-document"
-        let host = AgentHost(commands: [
-            AppCommand(AppCommands.snapshot, parameterKeys: ["scope"]) { [weak controller] request, _ in
-                guard request.scope == scope else { throw Failure(.invalidParams, "Unknown scope.") }
-                guard let controller, controller.isWindowLoaded, let window = controller.window else {
-                    throw Failure(.notReady, "The document window is unavailable.")
-                }
-                return ScreenState(
-                    screenId: "documents", windowId: "documents", ready: window.isVisible,
-                    revision: controller.revision, scope: scope,
-                    fields: ["selectedDocumentId": .string(controller.selectedDocumentID)]
-                )
-            }
-        ], scopes: [scope])
-        self.host = host
-        startup = Task {
-            do { try await host.start() }
-            catch { NSLog("The read-only document bridge could not start.") }
+        guard (try? LaunchOptions.parse())?.enabled == true else { return }
+        self.controller = controller
+        controller.onSelectionChange = { [runtime] in
+            runtime.record("selection.changed", scope: "selected-document", changedFields: ["selectedDocumentId"])
         }
+        let host = AgentHost(adapter: self, runtime: runtime, catalog: AgentCatalog(scopes: ["selected-document"]))
+        session.start(host, readOnly: true)
     }
 
-    func terminate(_ app: NSApplication) -> NSApplication.TerminateReply {
-        guard let host else { return .terminateNow }
-        Task {
-            await startup?.value
-            await host.stop()
-            app.reply(toApplicationShouldTerminate: true)
+    func snapshot(scope: String) throws -> ScreenSnapshot {
+        guard let controller, controller.isWindowLoaded, let window = controller.window else {
+            throw Failure(.notReady, "The document window is unavailable.")
         }
-        return .terminateLater
+        return ScreenSnapshot(screenId: "documents", windowId: "documents", ready: window.isVisible,
+                              fields: ["selectedDocumentId": .string(controller.selectedDocumentID)])
     }
+
+    func terminate(_ app: NSApplication) -> NSApplication.TerminateReply { session.terminate(app) }
 }

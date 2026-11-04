@@ -54,7 +54,7 @@ import Testing
     defer { listener.close() }
 
     // The listener belongs to this test process. PID 1 cannot be its peer.
-    await #expect(throws: SocketError.disconnected) {
+    await #expect(throws: SocketError.peerMismatch) {
         try await LocalSocket.exchange(Data([1]), path: path, expectedPID: 1, timeoutMs: 1_000)
     }
 }

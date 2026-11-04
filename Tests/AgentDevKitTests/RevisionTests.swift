@@ -9,7 +9,7 @@ import Testing
 
     #expect(throws: Failure(
         .staleRevision, "The cursor fell behind retained events.",
-        details: ["resyncRequired": "true", "latestRevision": "4"]
+        details: ["resyncRequired": true, "latestRevision": 4]
     )) {
         try journal.since(0)
     }

@@ -120,6 +120,20 @@ final class WorkspaceTests: XCTestCase {
     }
 
     @MainActor
+    func testRejectsUnknownAgentDevKitLaunchArgument() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--agentdevkit-unknown-option", "--enable-agentdevkit"]
+        app.launch()
+        defer { app.terminate() }
+
+        let status = app.staticTexts["status.agent-testing"]
+        XCTAssertTrue(status.waitForExistence(timeout: 3))
+        let text = status.value as? String ?? ""
+        XCTAssertTrue(text.contains("Bridge failed") && text.contains("--agentdevkit-unknown-option"), text)
+        XCTAssertTrue(app.descendants(matching: .any)["status.storage-error"].exists)
+    }
+
+    @MainActor
     func testRetriesFailedDocument() {
         let app = XCUIApplication()
         app.launchArguments = ["--agentdevkit-fixture", "network-error-v1"]

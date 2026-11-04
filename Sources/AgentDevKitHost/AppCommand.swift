@@ -5,6 +5,8 @@ public struct CommandContext: Sendable {
     public let requestId: UUID
     public let deadline: ContinuousClock.Instant
     let started: ContinuousClock.Instant
+    let sessionId: UUID
+    let pid: Int32
 
     public func checkDeadline() throws {
         if Task.isCancelled { throw Failure(.cancelled, "Request cancelled.") }
@@ -15,61 +17,56 @@ public struct CommandContext: Sendable {
         let components = started.duration(to: .now).components
         return Int(components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000)
     }
+
+    func encode<Output: Codable & Sendable>(_ result: Output, accepted: Bool = false) throws -> Data {
+        try JSONEncoder().encode(Response(
+            requestId: requestId, result: result, durationMs: durationMs, accepted: accepted,
+            sessionId: sessionId, pid: pid
+        ))
+    }
 }
 
+/// A typed handler registered under one method name. The host validates `params`
+/// against `parameters` before decoding `Input`, and reports the failing field.
 public struct AppCommand: Sendable {
     let method: String
     let mutating: Bool
-    let run: @Sendable (Data, CommandContext) async throws -> Data
+    let parameters: ObjectSchema
+    let run: @Sendable ([String: JSONValue], CommandContext) async throws -> Data
 
     public init<Input, Output>(
         _ command: Command<Input, Output>,
-        mutating: Bool = false,
-        parameterKeys: Set<String>,
+        parameters: ObjectSchema,
         accepted: @escaping @Sendable (Output) -> Bool = { _ in false },
         handler: @escaping @MainActor @Sendable (Input, CommandContext) async throws -> Output
     ) {
         method = command.method
-        self.mutating = mutating
-        run = { data, context in
+        mutating = command.mutating
+        self.parameters = parameters
+        run = { params, context in
+            try parameters.validate(params)
             let input: Input
             do {
-                let envelope = try JSONDecoder().decode(Parameters<Input>.self, from: data)
-                guard envelope.keys.isSubset(of: parameterKeys) else {
-                    throw Failure(.invalidParams, "Unexpected parameter field.")
-                }
-                input = envelope.value
+                input = try JSONDecoder().decode(Input.self, from: JSONEncoder().encode(params))
             } catch {
-                throw Failure(.invalidParams, "Parameters do not match the command schema.")
+                throw Failure(.invalidParams, "Parameters do not match the command schema.", details: decodingDetails(error))
             }
             try context.checkDeadline()
             let result = try await handler(input, context)
             try context.checkDeadline()
-            return try JSONEncoder().encode(Response(
-                requestId: context.requestId, result: result, durationMs: context.durationMs,
-                accepted: accepted(result)
-            ))
+            return try context.encode(result, accepted: accepted(result))
         }
     }
 }
 
-private struct Parameters<Value: Decodable>: Decodable {
-    let value: Value
-    let keys: Set<String>
-
-    init(from decoder: any Decoder) throws {
-        let envelope = try decoder.container(keyedBy: EnvelopeKey.self)
-        let params = try envelope.superDecoder(forKey: .params)
-        keys = Set(try params.container(keyedBy: FieldKey.self).allKeys.map(\.stringValue))
-        value = try Value(from: params)
+/// Names the failing parameter path without echoing the supplied value.
+func decodingDetails(_ error: any Error) -> [String: JSONValue]? {
+    let path: [any CodingKey]
+    switch error as? DecodingError {
+    case .keyNotFound(let key, let context)?: path = context.codingPath + [key]
+    case .typeMismatch(_, let context)?, .valueNotFound(_, let context)?, .dataCorrupted(let context)?: path = context.codingPath
+    default: return nil
     }
-
-    private enum EnvelopeKey: String, CodingKey { case params }
-
-    private struct FieldKey: CodingKey {
-        let stringValue: String
-        let intValue: Int? = nil
-        init?(stringValue: String) { self.stringValue = stringValue }
-        init?(intValue: Int) { return nil }
-    }
+    let field = path.map { $0.intValue.map(String.init) ?? $0.stringValue }.joined(separator: ".")
+    return field.isEmpty ? nil : ["field": .string(field)]
 }

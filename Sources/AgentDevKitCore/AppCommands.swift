@@ -2,33 +2,23 @@ import Foundation
 
 public struct Command<Input: Codable & Sendable, Output: Codable & Sendable>: Sendable {
     public let method: String
-    public init(_ method: String) { self.method = method }
+    /// Mutating commands are served only by sessions opened with mutation access, one at a time.
+    public let mutating: Bool
+    public init(_ method: String, mutating: Bool = false) {
+        self.method = method
+        self.mutating = mutating
+    }
 }
 
 public enum AppCommands {
-    public static let open = Command<OpenScreen, ScreenState>("navigation.open")
-    public static let load = Command<LoadFixture, FixtureState>("fixtures.load")
+    public static let open = Command<OpenScreen, ScreenState>("navigation.open", mutating: true)
+    public static let load = Command<LoadFixture, FixtureState>("fixtures.load", mutating: true)
     public static let snapshot = Command<SnapshotRequest, ScreenState>("state.snapshot")
-    public static let prepare = Command<PrepareScenario, ScenarioState>("scenario.prepare")
+    public static let prepare = Command<PrepareScenario, ScenarioState>("scenario.prepare", mutating: true)
 }
 
-public struct RouteContext: Codable, Sendable {
-    public let projectId: String?
-    public let nodeId: String?
-    public init(projectId: String? = nil, nodeId: String? = nil) {
-        self.projectId = projectId
-        self.nodeId = nodeId
-    }
-
-    public init(from decoder: any Decoder) throws {
-        try validateKeys(in: decoder, allowed: ["projectId", "nodeId"])
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(projectId: try fields.decodeIfPresent(String.self, forKey: .projectId),
-                  nodeId: try fields.decodeIfPresent(String.self, forKey: .nodeId))
-    }
-
-    private enum CodingKeys: String, CodingKey { case projectId, nodeId }
-}
+/// App-defined route context. Each route advertises the accepted keys in its `contextSchema`.
+public typealias RouteContext = [String: JSONValue]
 
 public struct OpenScreen: Codable, Sendable {
     public let route: String
@@ -91,14 +81,13 @@ public struct ScreenState: Codable, Sendable {
 
 public struct FixtureState: Codable, Sendable {
     public let fixture: String
-    public let projectId: String?
-    public let nodeId: String?
     public let revision: UInt64
-    public init(fixture: String, projectId: String?, nodeId: String?, revision: UInt64) {
+    /// App-defined summary of the loaded data, such as the selected entity IDs.
+    public let fields: [String: JSONValue]
+    public init(fixture: String, revision: UInt64, fields: [String: JSONValue] = [:]) {
         self.fixture = fixture
-        self.projectId = projectId
-        self.nodeId = nodeId
         self.revision = revision
+        self.fields = fields
     }
 }
 
@@ -145,16 +134,21 @@ public enum JSONValue: Codable, Sendable, Equatable {
     }
 }
 
-package func validateKeys(in decoder: any Decoder, allowed: Set<String>) throws {
-    let fields = try decoder.container(keyedBy: AnyKey.self)
-    guard fields.allKeys.allSatisfy({ allowed.contains($0.stringValue) }) else {
-        throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown object field."))
+extension JSONValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByBooleanLiteral,
+    ExpressibleByFloatLiteral, ExpressibleByArrayLiteral, ExpressibleByDictionaryLiteral, ExpressibleByNilLiteral {
+    public init(stringLiteral value: String) { self = .string(value) }
+    public init(integerLiteral value: Int64) { self = .integer(value) }
+    public init(booleanLiteral value: Bool) { self = .bool(value) }
+    public init(floatLiteral value: Double) { self = .number(value) }
+    public init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
+    public init(dictionaryLiteral elements: (String, JSONValue)...) {
+        self = .object(Dictionary(elements, uniquingKeysWith: { _, last in last }))
     }
-}
+    public init(nilLiteral: ()) { self = .null }
 
-private struct AnyKey: CodingKey {
-    let stringValue: String
-    let intValue: Int? = nil
-    init?(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue: Int) { return nil }
+    public var stringValue: String? { if case .string(let value) = self { value } else { nil } }
+    public var integerValue: Int64? { if case .integer(let value) = self { value } else { nil } }
+    public var boolValue: Bool? { if case .bool(let value) = self { value } else { nil } }
+    public var objectValue: [String: JSONValue]? { if case .object(let value) = self { value } else { nil } }
+    public var arrayValue: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
 }

@@ -4,7 +4,8 @@ import AppKit
 final class DocumentWindowController: NSWindowController {
     private let titleLabel = NSTextField(labelWithString: "Draft")
     private(set) var selectedDocumentID = "draft"
-    private(set) var revision: UInt64 = 0
+    /// Called after the selection changes. Testing builds use it to record a bridge event.
+    var onSelectionChange: (() -> Void)?
 
     init() {
         let window = NSWindow(
@@ -47,8 +48,8 @@ final class DocumentWindowController: NSWindowController {
     private func select(id: String, title: String) {
         guard selectedDocumentID != id else { return }
         selectedDocumentID = id
-        revision += 1
         titleLabel.stringValue = title
+        onSelectionChange?()
     }
 }
 

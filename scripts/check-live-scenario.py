@@ -29,7 +29,7 @@ for _ in range(3):
     reply = run(*prepare)
     assert reply["status"] == "completed"
     result = reply["result"]
-    assert result["fixture"]["projectId"] == "fixture:large-project"
+    assert result["fixture"]["fields"] == {"projectId": "fixture:large-project", "nodeId": "node-1"}
     screen = result["screen"]
     assert screen["ready"] is True
     assert screen["screenId"] == "projects.editor.inspector"

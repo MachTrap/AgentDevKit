@@ -6,7 +6,7 @@ extension AppCommands {
     public static let events = Command<EventsRequest, EventPage>("events.since")
     public static let diagnostics = Command<DiagnosticsRequest, [DiagnosticRecord]>("diagnostics.recent")
     public static let actions = Command<EmptyParameters, [ActionCapability]>("actions.list")
-    public static let invoke = Command<ActionRequest, ScreenState>("actions.invoke")
+    public static let invoke = Command<ActionRequest, ActionResult>("actions.invoke", mutating: true)
 }
 
 public struct ObserveRequest: Codable, Sendable {
@@ -54,26 +54,29 @@ public struct StateObservation: Codable, Sendable {
 public struct WaitRequest: Codable, Sendable {
     public let condition: String
     public let scope: String
-    public let operationId: UUID?
-    public let field: String?
-    public let value: JSONValue?
+    /// Condition arguments, validated against the condition's advertised `argumentsSchema`.
+    public let arguments: [String: JSONValue]?
+    /// When false, an unsatisfied condition returns `satisfied: false` with blockers instead of TIMEOUT.
+    public let failOnTimeout: Bool?
 
-    public init(condition: String, scope: String, operationId: UUID? = nil, field: String? = nil, value: JSONValue? = nil) {
+    public init(condition: String, scope: String, arguments: [String: JSONValue]? = nil, failOnTimeout: Bool? = nil) {
         self.condition = condition
         self.scope = scope
-        self.operationId = operationId
-        self.field = field
-        self.value = value
+        self.arguments = arguments
+        self.failOnTimeout = failOnTimeout
     }
 }
 
 public struct WaitState: Codable, Sendable {
     public let satisfied: Bool
+    /// Named gates that were still open at the last evaluation. Empty when satisfied.
+    public let blockers: [String]
     public let screen: ScreenState
     public let lifecycle: LifecycleEvent?
 
-    public init(screen: ScreenState, lifecycle: LifecycleEvent? = nil) {
-        self.satisfied = true
+    public init(satisfied: Bool = true, blockers: [String] = [], screen: ScreenState, lifecycle: LifecycleEvent? = nil) {
+        self.satisfied = satisfied
+        self.blockers = blockers
         self.screen = screen
         self.lifecycle = lifecycle
     }
@@ -143,7 +146,7 @@ public struct RevisionJournal: Sendable {
         }
         guard revision - cursor <= UInt64(buffer.count) else {
             throw Failure(.staleRevision, "The cursor fell behind retained events.",
-                          details: ["resyncRequired": "true", "latestRevision": String(revision)])
+                          details: ["resyncRequired": true, "latestRevision": .integer(Int64(revision))])
         }
         let count = min(Int(revision - cursor), limit)
         let events = (0..<count).compactMap { offset in buffer[index(cursor + UInt64(offset) + 1)] }
@@ -160,6 +163,16 @@ public struct RevisionJournal: Sendable {
             }
         }
         return nil
+    }
+
+    /// Open spans of one kind, oldest first.
+    public func activeLifecycles(_ kind: LifecycleEvent.Kind) -> [(id: UUID, name: String)] {
+        lifecycles.values.filter { $0.kind == kind }.sorted { $0.started < $1.started }.map { ($0.token.id, $0.name) }
+    }
+
+    /// The open span with this ID, if any.
+    public func activeLifecycle(_ id: UUID) -> (kind: LifecycleEvent.Kind, name: String)? {
+        lifecycles[id].map { ($0.kind, $0.name) }
     }
 
     private func index(_ revision: UInt64) -> Int {
@@ -216,6 +229,26 @@ public struct ActionCapability: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey { case id, scope, enabled, inputSchema, interaction }
+}
+
+public struct ActionResult: Codable, Sendable {
+    public enum Outcome: String, Codable, Sendable { case completed, accepted }
+
+    public let actionId: String
+    public let outcome: Outcome
+    /// Journal revision after the action ran.
+    public let revision: UInt64
+    /// Tracked work started by the action. Wait on it with `operation.completed`.
+    public let operationId: UUID?
+    public let screen: ScreenState
+
+    public init(actionId: String, outcome: Outcome, revision: UInt64, operationId: UUID? = nil, screen: ScreenState) {
+        self.actionId = actionId
+        self.outcome = outcome
+        self.revision = revision
+        self.operationId = operationId
+        self.screen = screen
+    }
 }
 
 public struct ActionRequest: Codable, Sendable {

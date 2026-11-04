@@ -65,8 +65,9 @@ for architecture in architectures:
 
 for evidence in [symbols, libraries, *link_maps, release.read_bytes().decode("latin1")]:
     assert not re.search(
-        r"AgentDevKit(?:Core|Host|Transport)|LabRuntime|LabCommands|TestingSession|TestingWorkspace|"
-        r"agentdevkit-legacy-overflow|enable-agentdevkit|allow-agentdevkit-mutations|long-node-names-v1",
+        r"AgentDevKit(?:Core|Host|Transport|Client)|AgentRuntime|AgentSession|LoopbackPairing|TestingProfile|"
+        r"LaunchOptions|LabAdapter|LabEvents|TestingSession|agentdevkit-legacy-overflow|enable-agentdevkit|"
+        r"allow-agentdevkit-mutations|agentdevkit-profile|agentdevkit-fixture|long-node-names-v1",
         evidence,
     ), "Release contains Testing implementation or activation flags"
 
@@ -90,7 +91,7 @@ def wait_for_session(process):
 def reject(selector):
     result = cli("--session", selector, "session", "ping")
     assert result.returncode == 3, result.stdout
-    assert json.loads(result.stdout)["error"]["code"] == "SESSION_EXPIRED"
+    assert json.loads(result.stdout)["error"]["code"] == "SESSION_NOT_FOUND"
 
 def stop(process):
     if process.poll() is None:

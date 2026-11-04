@@ -18,6 +18,12 @@
       "prompt": "The AgentDevKit CLI shows no sessions after my app relaunched. I still need to verify that the Appearance menu opens.",
       "expected_output": "Checks the current target and opt-in without weakening authentication or selecting a stale session. Uses actual UI input through XCUITest or accessibility to verify the navigation path, or reports the exact missing verification.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "agentdevctl says UNSUPPORTED_VERSION when I select my app's session, but the app shows Bridge active. Get me to a working connection.",
+      "expected_output": "Reads session list protocol versions and the error remedy, identifies mismatched tool and app releases, rebuilds or selects tools from the app's AgentDevKit release (or rebuilds the app), and does not edit descriptors or weaken authentication.",
+      "files": []
     }
   ]
 }
