@@ -1,3 +1,20 @@
+# Migration guide
+
+## v0.3 to v0.4
+
+v0.4 collects the fixes from adopting AgentDevKit in Tern, a separate sandboxed SwiftUI app. The wire protocol stays `agentdevkit/2`, and v0.3 and v0.4 tools and apps interoperate.
+
+| Change | What to do |
+| --- | --- |
+| `AgentAdapter.Destination` is now `NavigationTarget` | Usually nothing: Swift infers it from `resolve` and `present`. Rename explicit `typealias Destination = …` in adapters |
+| `secretValues()` on the adapter | Return credential values. Delete hand-written snapshot redaction |
+| `ScreenSnapshot.preview(_:maxBytes:)` | Use it for unbounded text fields |
+| `runtime.end(id:outcome:)` | Close concurrent work spans by operation ID instead of per-operation slots |
+| `AgentCatalog.fixtureArguments` and `loadFixture(_:arguments:context:)` | Optional. Tools pass `--fixture-args JSON`; capabilities list the schemas |
+| Navigation timeouts may include `details.hint` | Read it when a screen never reports appearance |
+| CLI and MCP waits up to 120 s | Long waits run as consecutive requests within the session's limit |
+| Unix listener accepts through a dispatch source | No threads block while the bridge is idle; no API change |
+
 # Migrating from v0.2 to v0.3
 
 v0.3 moves the protocol runtime into the library. An app now supplies one main-actor adapter and a declarative catalog, and the host serves every protocol method. The wire protocol moves to `agentdevkit/2`, and the Swift API changes are source-breaking.

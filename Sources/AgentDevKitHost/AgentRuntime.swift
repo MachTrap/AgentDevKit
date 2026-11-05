@@ -15,6 +15,7 @@ public struct SpanSlot: Hashable, Sendable, ExpressibleByStringLiteral {
 public final class AgentRuntime {
     public private(set) var journal: RevisionJournal
     private var slots: [SpanSlot: LifecycleToken] = [:]
+    private var open: [UUID: LifecycleToken] = [:]
     private var diagnostics: [DiagnosticRecord] = []
     private let diagnosticsCapacity: Int
     private var subscriptions: [UUID: AsyncStream<Void>.Continuation] = [:]
@@ -46,16 +47,28 @@ public final class AgentRuntime {
         correlationId: UUID? = nil, changedFields: [String] = []
     ) -> LifecycleToken? {
         defer { notifyChange() }
-        return journal.beginLifecycle(kind, name: name, scope: scope, id: id, parentId: parentId,
-                                      correlationId: correlationId, changedFields: changedFields)
+        let token = journal.beginLifecycle(kind, name: name, scope: scope, id: id, parentId: parentId,
+                                           correlationId: correlationId, changedFields: changedFields)
+        if let token { open[token.id] = token }
+        return token
     }
 
     /// Closes a span once. Duplicate, foreign and nil tokens have no effect.
     @discardableResult
     public func end(_ token: LifecycleToken?, outcome: LifecycleEvent.Outcome, changedFields: [String] = []) -> Bool {
         guard journal.endLifecycle(token, outcome: outcome, changedFields: changedFields) else { return false }
+        if let token { open[token.id] = nil }
         notifyChange()
         return true
+    }
+
+    /// Closes the open span with this ID, such as an operation ID chosen at `begin`. Use it for
+    /// concurrent work whose terminal callback knows the ID but not the token.
+    @discardableResult
+    public func end(id: UUID, outcome: LifecycleEvent.Outcome, changedFields: [String] = []) -> Bool {
+        guard let token = open[id] else { return false }
+        for (slot, held) in slots where held == token { slots[slot] = nil }
+        return end(token, outcome: outcome, changedFields: changedFields)
     }
 
     /// Opens a span in a slot. A span still open in that slot ends as `superseded` first.

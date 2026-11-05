@@ -8,16 +8,16 @@ v0.3 speaks wire protocol `agentdevkit/2`. Build the app and tools from the same
 
 ## Install the component you need
 
-The v0.3.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
+The v0.4.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
 
-- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.3.0](https://github.com/MachTrap/AgentDevKit/tree/v0.3.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
-- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.3.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.3.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
+- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.4.0](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
+- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.4.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
 - **CLI only.** Check out the tag and build the executable product. The root package has no external dependencies.
 - **MCP only.** Build the [separate MCP package](#build-the-mcp-sidecar) from the tag. It uses the client libraries directly.
 - **Examples.** Open the Xcode projects from the same tag and choose the Testing scheme described in the example's guide.
 
 ```sh
-git clone --branch v0.3.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
+git clone --branch v0.4.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
 cd AgentDevKit
 swift build -c release --product agentdevctl
 .build/release/agentdevctl --version

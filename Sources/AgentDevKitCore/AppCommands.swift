@@ -33,7 +33,12 @@ public struct OpenScreen: Codable, Sendable {
 
 public struct LoadFixture: Codable, Sendable {
     public let fixture: String
-    public init(fixture: String) { self.fixture = fixture }
+    /// Validated against the fixture's advertised `fixtureArguments` schema.
+    public let arguments: [String: JSONValue]?
+    public init(fixture: String, arguments: [String: JSONValue]? = nil) {
+        self.fixture = fixture
+        self.arguments = arguments
+    }
 }
 
 public struct SnapshotRequest: Codable, Sendable {
@@ -46,11 +51,14 @@ public struct PrepareScenario: Codable, Sendable {
     public let route: String
     public let context: RouteContext?
     public let waitForReady: Bool?
-    public init(fixture: String, route: String, context: RouteContext? = nil, waitForReady: Bool? = nil) {
+    public let fixtureArguments: [String: JSONValue]?
+    public init(fixture: String, route: String, context: RouteContext? = nil, waitForReady: Bool? = nil,
+                fixtureArguments: [String: JSONValue]? = nil) {
         self.fixture = fixture
         self.route = route
         self.context = context
         self.waitForReady = waitForReady
+        self.fixtureArguments = fixtureArguments
     }
 }
 

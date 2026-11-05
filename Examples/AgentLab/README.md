@@ -10,7 +10,7 @@ Follow the [quick start](../../README.md#quick-start) from the repository root. 
 
 ## Sandboxed Testing
 
-Build from the [v0.3.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.3.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
+Build from the [v0.4.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
 
 To build and sign from a shell, choose the development identity and the team it belongs to. Set `lane=AppGroup` or `lane=Loopback`. This uses the same entitlements as the Xcode targets.
 

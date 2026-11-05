@@ -42,7 +42,7 @@ enum Builtins {
                 "category": .string(maxLength: 128),
                 "limit": .integer(minimum: 1, maximum: 50)
             ])) { input, _ in
-                try runtime.recentDiagnostics(input, categories: catalog.diagnosticCategories)
+                try runtime.recentDiagnostics(input, categories: catalog.diagnosticCategories).map(engine.redact)
             },
             AppCommand(AppCommands.actions, parameters: .empty) { _, _ in
                 // Actions are mutations, so a read-only session lists none.
@@ -74,14 +74,15 @@ enum Builtins {
             })
         }
         if !catalog.fixtures.isEmpty {
-            commands.append(AppCommand(AppCommands.load, parameters: ObjectSchema(["fixture": .string(maxLength: 128)],
+            commands.append(AppCommand(AppCommands.load, parameters: ObjectSchema(["fixture": .string(maxLength: 128), "arguments": .value],
                                                                                  required: ["fixture"])) { input, context in
-                try engine.load(input.fixture, context: context)
+                try engine.load(input.fixture, arguments: input.arguments, context: context)
             })
         }
         if !catalog.routes.isEmpty, !catalog.fixtures.isEmpty {
             var scenario = navigation
             scenario.properties["fixture"] = .string(maxLength: 128)
+            scenario.properties["fixtureArguments"] = .value
             scenario.required.insert("fixture")
             commands.append(AppCommand(AppCommands.prepare, parameters: scenario, accepted: { !$0.screen.ready }) { input, context in
                 try await engine.prepare(input, context: context)
@@ -117,16 +118,39 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
         let snapshot = try adapter.snapshot(scope: scope)
         return ScreenState(
             screenId: snapshot.screenId, windowId: snapshot.windowId, ready: snapshot.ready, revision: runtime.revision,
-            scope: scope, fields: snapshot.fields, operationId: snapshot.operationId,
+            scope: scope, fields: redact(snapshot.fields), operationId: snapshot.operationId,
             blockers: snapshot.blockers.isEmpty ? nil : snapshot.blockers
         )
     }
 
     private func deadline(_ context: CommandContext) -> ContinuousClock.Instant { context.deadline - waitMargin }
 
+    // MARK: Redaction
+
+    /// Replaces every app-declared secret in string values, recursively. Applied to all outgoing app fields.
+    func redact(_ fields: [String: JSONValue]) -> [String: JSONValue] {
+        let secrets = adapter.secretValues().filter { !$0.isEmpty }.sorted { $0.count > $1.count }
+        guard !secrets.isEmpty else { return fields }
+        func scrub(_ value: JSONValue) -> JSONValue {
+            switch value {
+            case .string(let text): .string(secrets.reduce(text) { $0.replacingOccurrences(of: $1, with: "<redacted>") })
+            case .array(let items): .array(items.map(scrub))
+            case .object(let object): .object(object.mapValues(scrub))
+            default: value
+            }
+        }
+        return fields.mapValues(scrub)
+    }
+
+    func redact(_ record: DiagnosticRecord) -> DiagnosticRecord {
+        guard case .string(let message)? = redact(["m": .string(record.message)])["m"], message != record.message else { return record }
+        return DiagnosticRecord(severity: record.severity, category: record.category, code: record.code, message: message,
+                                timestamp: record.timestamp, correlationId: record.correlationId)
+    }
+
     // MARK: Navigation and fixtures
 
-    func resolve(route id: String, context: RouteContext?, fixture: String?) throws -> Adapter.Destination {
+    func resolve(route id: String, context: RouteContext?, fixture: String?) throws -> Adapter.NavigationTarget {
         guard let route = catalog.routes.first(where: { $0.id == id }) else {
             throw Failure(.routeNotFound, "Route is not registered.", details: ["field": "route"])
         }
@@ -134,8 +158,9 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
         return try adapter.resolve(route: id, context: context ?? [:], fixture: fixture)
     }
 
-    func open(_ destination: Adapter.Destination, wait: Bool, context: CommandContext, scenarioId: UUID?) async throws -> ScreenState {
+    func open(_ destination: Adapter.NavigationTarget, wait: Bool, context: CommandContext, scenarioId: UUID?) async throws -> ScreenState {
         try context.checkDeadline()
+        let before = runtime.revision
         let presentation = adapter.present(destination, request: PresentationRequest(requestId: context.requestId, scenarioId: scenarioId))
         guard wait else { return try screen(primaryScope) }
         var blockers: [String] = []
@@ -150,19 +175,34 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
             }
         }
         guard let ready else {
-            throw Failure(.timeout, "Screen did not become ready before the deadline.", retryable: true,
-                          details: ["blockers": .array(blockers.map(JSONValue.string))])
+            var details: [String: JSONValue] = ["blockers": .array(blockers.map(JSONValue.string))]
+            if !screenOpened(since: before) {
+                // The most common integration bug: the view's appearance callback never reports this presentation.
+                details["hint"] = "No screen.opened event was recorded for this presentation. Check that the destination view reports its appearance for every presentation, for example with onAppear inside .id(presentationId)."
+            }
+            throw Failure(.timeout, "Screen did not become ready before the deadline.", retryable: true, details: details)
         }
         return ready
     }
 
-    func load(_ id: String, context: CommandContext) throws -> FixtureState {
+    private func screenOpened(since revision: UInt64) -> Bool {
+        guard let page = try? runtime.journal.since(revision) else { return true }
+        return page.events.contains { $0.lifecycle?.kind == .screen && $0.lifecycle?.phase == .began }
+    }
+
+    func load(_ id: String, arguments: [String: JSONValue]? = nil, context: CommandContext) throws -> FixtureState {
         guard catalog.fixtures.contains(id) else {
             throw Failure(.fixtureNotFound, "Fixture is not registered.", details: ["field": "fixture"])
         }
+        let arguments = arguments ?? [:]
+        if let schema = catalog.fixtureArguments[id] {
+            try schema.validate(arguments, prefix: "arguments.")
+        } else if let extra = arguments.keys.sorted().first {
+            throw Failure(.invalidParams, "This fixture accepts no arguments.", details: ["field": .string("arguments." + extra)])
+        }
         try context.checkDeadline()
-        let fields = try adapter.loadFixture(id, context: context)
-        return FixtureState(fixture: id, revision: runtime.revision, fields: fields)
+        let fields = try adapter.loadFixture(id, arguments: arguments, context: context)
+        return FixtureState(fixture: id, revision: runtime.revision, fields: redact(fields))
     }
 
     func prepare(_ input: PrepareScenario, context: CommandContext) async throws -> ScenarioState {
@@ -174,11 +214,11 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
             guard catalog.fixtures.contains(input.fixture) else {
                 throw Self.phase(Failure(.fixtureNotFound, "Fixture is not registered.", details: ["field": "fixture"]), "fixture")
             }
-            let destination: Adapter.Destination
+            let destination: Adapter.NavigationTarget
             do { destination = try resolve(route: input.route, context: input.context, fixture: input.fixture) }
             catch { throw Self.phase(error, "navigation") }
             let fixture: FixtureState
-            do { fixture = try load(input.fixture, context: context) }
+            do { fixture = try load(input.fixture, arguments: input.fixtureArguments, context: context) }
             catch { throw Self.phase(error, "fixture") }
             do {
                 let screen = try await open(destination, wait: input.waitForReady ?? true, context: context, scenarioId: span?.id)
