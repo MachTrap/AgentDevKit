@@ -2,7 +2,7 @@
 name: macos-agent-native
 description: Use when integrating AgentDevKit into a SwiftUI or AppKit macOS app, or when reproducing a bug or verifying a feature in a running native app using a test fixture, deep route, or scoped state. Apply when UI setup or distinguishing model state from rendered behavior is part of the task.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # Agent-native macOS development
@@ -13,6 +13,8 @@ Use the real app and choose evidence for the behavior under test.
 - **Drive an app that already has the bridge** using [tool commands](references/TOOLS.md). Discover sessions, verify the exact instance, then discover its routes, fixtures, scopes, actions and wait conditions. On multiple matches, use a session UUID. Use tools from the same AgentDevKit release as the app.
 - **Choose a reproduction and verification path** using [workflows](references/WORKFLOWS.md). Use fixture and route setup for a deep screen. Use real UI input for transitions, focus, clickability and user-path regressions.
 - **Handle missing tools or a failed connection** using [troubleshooting](references/TROUBLESHOOTING.md). Preserve authentication and use ordinary Xcode, accessibility, or existing tests when the bridge is unavailable.
+
+When capabilities list `ui`, look at the result: `ui capture` shows the real window and `ui tree` its accessibility identifiers and frames, with no extra permission. Treat them as in-process evidence, separate from XCUITest.
 
 Prefer a composed setup, a scoped snapshot, and combined observation after that snapshot's revision. Use named waits for tracked work. On `STALE_REVISION`, take a fresh snapshot. Expand diagnostics only when a failure calls for it.
 

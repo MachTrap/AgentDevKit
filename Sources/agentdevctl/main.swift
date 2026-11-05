@@ -7,6 +7,7 @@ let usage: String = {
     var lines = [
         "Usage:",
         "  agentdevctl --version",
+        "  " + Scaffold.usage + "   (write a Testing target's files and print the Xcode steps)",
         "  Global options (before the command): --session ID_OR_BUNDLE · --app-group ID | --pairing-dir PATH | --container BUNDLE_ID",
         "  A bundle ID passed to --session also finds a sandboxed app's session in its own container.",
         "  agentdevctl session list [--json]",
@@ -24,7 +25,8 @@ let usage: String = {
             }
             return field.required ? option : "[\(option)]"
         }
-        lines.append("  agentdevctl [--session ID_OR_BUNDLE] " + (operation.command + options + ["[--timeout-ms MS]", "[--json]"]).joined(separator: " "))
+        let output = operation.image ? ["[--out FILE]"] : []
+        lines.append("  agentdevctl [--session ID_OR_BUNDLE] " + (operation.command + options + output + ["[--timeout-ms MS]", "[--json]"]).joined(separator: " "))
     }
     lines.append("Exit codes: 0 ok · 2 invalid input · 3 session or connection · 4 app failure · 5 timeout · 6 version or identity mismatch")
     return lines.joined(separator: "\n")
@@ -62,6 +64,19 @@ do {
         print(AgentDevKitVersion.current)
     case ["--help"], ["-h"]:
         print(usage)
+    case let words where words.first == "scaffold":
+        let options = try Scaffold.parse(words.dropFirst())
+        let written: [String]
+        do { written = try Scaffold.run(options) } catch let failure as Failure { throw failure } catch {
+            throw Failure(.invalidParams, "The files could not be written to \(options.output.path).")
+        }
+        if json {
+            try printJSON(written)
+        } else {
+            print(written.map { "  " + $0 }.joined(separator: "\n"))
+            print("")
+            print(Scaffold.steps(options))
+        }
     case ["session", "list"] where selector == nil:
         let sessions = try AgentClient.sessions(at: location)
         if json {
@@ -91,9 +106,27 @@ do {
         guard let operation = AgentOperation.all.first(where: { arguments.starts(with: $0.command) }) else {
             throw Failure(.invalidParams, usage)
         }
-        let (values, timeoutMs) = try parseOptions(arguments.dropFirst(operation.command.count), for: operation)
+        var options = Array(arguments.dropFirst(operation.command.count))
+        var output: String?
+        if operation.image, let index = options.firstIndex(of: "--out") {
+            guard index + 1 < options.count else { throw Failure(.invalidParams, "Missing value for --out.") }
+            output = options[index + 1]
+            options.removeSubrange(index...(index + 1))
+        }
+        let (values, timeoutMs) = try parseOptions(options[...], for: operation)
         let client = try AgentClient(session: selector, at: location)
-        let response = try await operation.run(client, values, timeoutMs: timeoutMs)
+        var response = try await operation.run(client, values, timeoutMs: timeoutMs)
+        if let output, case .object(var envelope) = response, case .object(var result)? = envelope["result"],
+           let encoded = result["data"]?.stringValue, let image = Data(base64Encoded: encoded) {
+            let url = URL(filePath: output)
+            do { try image.write(to: url, options: .atomic) } catch {
+                throw Failure(.invalidParams, "The image could not be written to \(output).")
+            }
+            result["data"] = nil
+            result["path"] = .string(url.standardizedFileURL.path)
+            envelope["result"] = .object(result)
+            response = .object(envelope)
+        }
         if json {
             try printJSON(response)
         } else if let result = response.objectValue?["result"] {

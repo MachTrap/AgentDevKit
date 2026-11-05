@@ -1,4 +1,5 @@
 import AgentDevKitCore
+import AppKit
 import Foundation
 
 /// Scoped, app-owned state for one snapshot. The host adds the scope and journal revision.
@@ -66,12 +67,17 @@ public protocol AgentAdapter: AnyObject, Sendable {
     func loadFixture(_ id: String, context: CommandContext) throws -> [String: JSONValue]
 
     /// Loads a fixture with arguments validated against `AgentCatalog.fixtureArguments[id]`.
-    /// The default ignores the arguments and calls `loadFixture(_:context:)`.
-    func loadFixture(_ id: String, arguments: [String: JSONValue], context: CommandContext) throws -> [String: JSONValue]
+    /// The default ignores the arguments and calls `loadFixture(_:context:)`. It may be async, for apps whose
+    /// storage is an actor; a synchronous implementation still satisfies it.
+    func loadFixture(_ id: String, arguments: [String: JSONValue], context: CommandContext) async throws -> [String: JSONValue]
 
     /// Exact strings that must never leave the app, such as tokens and passwords from the app's own
     /// secret storage. The host replaces each one with `<redacted>` in every snapshot and fixture field.
     func secretValues() -> [String]
+
+    /// The window that `ui.capture`, `ui.tree` and `ui.press` inspect. The default matches the
+    /// identifier, an identifier prefix or the title, and with no ID picks the key or main window.
+    func window(for windowId: String?) -> NSWindow?
 }
 
 extension AgentAdapter {
@@ -87,11 +93,13 @@ extension AgentAdapter {
         throw Failure(.fixtureNotFound, "Fixture is not registered.")
     }
 
-    public func loadFixture(_ id: String, arguments: [String: JSONValue], context: CommandContext) throws -> [String: JSONValue] {
+    public func loadFixture(_ id: String, arguments: [String: JSONValue], context: CommandContext) async throws -> [String: JSONValue] {
         try loadFixture(id, context: context)
     }
 
     public func secretValues() -> [String] { [] }
+
+    public func window(for windowId: String?) -> NSWindow? { UIInspection.defaultWindow(windowId) }
 }
 
 extension ScreenSnapshot {

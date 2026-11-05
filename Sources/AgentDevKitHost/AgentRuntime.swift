@@ -16,6 +16,7 @@ public final class AgentRuntime {
     public private(set) var journal: RevisionJournal
     private var slots: [SpanSlot: LifecycleToken] = [:]
     private var open: [UUID: LifecycleToken] = [:]
+    private var progress: [UUID: (completed: Int, total: Int?)] = [:]
     private var diagnostics: [DiagnosticRecord] = []
     private let diagnosticsCapacity: Int
     private var subscriptions: [UUID: AsyncStream<Void>.Continuation] = [:]
@@ -57,7 +58,10 @@ public final class AgentRuntime {
     @discardableResult
     public func end(_ token: LifecycleToken?, outcome: LifecycleEvent.Outcome, changedFields: [String] = []) -> Bool {
         guard journal.endLifecycle(token, outcome: outcome, changedFields: changedFields) else { return false }
-        if let token { open[token.id] = nil }
+        if let token {
+            open[token.id] = nil
+            progress[token.id] = nil
+        }
         notifyChange()
         return true
     }
@@ -69,6 +73,28 @@ public final class AgentRuntime {
         guard let token = open[id] else { return false }
         for (slot, held) in slots where held == token { slots[slot] = nil }
         return end(token, outcome: outcome, changedFields: changedFields)
+    }
+
+    /// Reports progress of an open span, such as items processed by a batch. Records a `work.progress`
+    /// event so waits and observers see it. Returns false when no span with this ID is open.
+    @discardableResult
+    public func progress(id: UUID, completed: Int, total: Int? = nil) -> Bool {
+        guard open[id] != nil, let span = journal.openSpans.first(where: { $0.id == id }) else { return false }
+        progress[id] = (max(0, completed), total.map { max(0, $0) })
+        record("\(span.kind.rawValue).progress", scope: span.scope, correlationId: span.correlationId, changedFields: ["progress"])
+        return true
+    }
+
+    /// Open spans with their age and progress, oldest first.
+    public func operations() -> [OperationInfo] {
+        let now = ContinuousClock.now
+        return journal.openSpans.map { span in
+            let age = span.started.duration(to: now).components
+            return OperationInfo(id: span.id, kind: span.kind, name: span.name, scope: span.scope, parentId: span.parentId,
+                                 correlationId: span.correlationId,
+                                 ageMs: Int(age.seconds * 1_000 + age.attoseconds / 1_000_000_000_000_000),
+                                 completed: progress[span.id]?.completed, total: progress[span.id]?.total)
+        }
     }
 
     /// Opens a span in a slot. A span still open in that slot ends as `superseded` first.

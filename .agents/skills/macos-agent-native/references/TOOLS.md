@@ -66,6 +66,27 @@ def run(*args):
 
 For a sandboxed app that publishes in its own container, select it by bundle ID with `--session BUNDLE_ID`, or put `--container BUNDLE_ID` before the command. `session list` does not scan containers. For App Group or paired loopback sessions, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
 
+## UI inspection
+
+When capabilities list `ui`, look at the real window before and after a change:
+
+```sh
+agentdevctl --session BUNDLE_ID ui capture --out window.png [--max-dimension 1600] [--format jpeg]
+agentdevctl --session BUNDLE_ID ui tree --only-identified            # roles, identifiers, labels, frames
+agentdevctl --session BUNDLE_ID ui tree --prefix button. --source appkit
+agentdevctl --session BUNDLE_ID ui press --id button.send            # mutation sessions only
+agentdevctl --session BUNDLE_ID operations list                      # open spans, age, progress
+```
+
+- `ui tree --source accessibility` (default) is the system accessibility tree. `appkit` walks AppKit accessibility objects, and `views` lists the view hierarchy with class names, for diagnosing layout and captures.
+- Frames are `[x, y, width, height]` in window points from the top-left corner.
+- A press runs the control's real action, but it does not prove hit testing or focus. Use XCUITest for that.
+- Captures approximate glass: refraction and blur are not reproduced, and SwiftUI glass shapes draw without their fill. Check controls you cannot see with `ui tree`.
+
+## Scaffold
+
+`agentdevctl scaffold --app NAME [--bundle-id ID] [--out DIR] [--appkit]` writes a Testing target's files and prints the Xcode steps. It refuses to overwrite files unless you pass `--force`.
+
 ## MCP
 
 Build with `swift build --package-path Tools/MCP --force-resolved-versions -c release`. This needs Swift 6.2 or later. Add `--show-bin-path` to find the executable directory. Register the absolute path of `agentdevkit-mcp` as a stdio server in the client the user already uses. For example, Claude Code:
@@ -80,6 +101,7 @@ Call `agentdevkit_session` first, then pass a `sessionId` (UUID or unique bundle
 
 - `agentdevkit_capabilities`, `agentdevkit_prepare`, `agentdevkit_fixtures`, `agentdevkit_navigate`
 - `agentdevkit_state`, `agentdevkit_observe`, `agentdevkit_wait`, `agentdevkit_events`
-- `agentdevkit_diagnostics`, `agentdevkit_actions`, `agentdevkit_invoke`
+- `agentdevkit_diagnostics`, `agentdevkit_actions`, `agentdevkit_invoke`, `agentdevkit_operations`
+- `agentdevkit_capture` (returns image content, so the model sees the window), `agentdevkit_ui_tree`, `agentdevkit_press`
 
-Every tool accepts `timeoutMs`. Tool errors carry the bridge error code in structured output. The CLI and the MCP tools are generated from one operation table, so their fields and defaults match.
+Every tool accepts `timeoutMs`. The app answers `TIMEOUT` with its blockers and hints at that deadline; the client keeps reading for up to one more second so that answer survives a loaded machine. Tool errors carry the bridge error code in structured output. The CLI and the MCP tools are generated from one operation table, so their fields and defaults match.

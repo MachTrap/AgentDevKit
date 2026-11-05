@@ -52,14 +52,18 @@ public struct AgentOperation: Sendable {
     public let fields: [Field]
     public let mutating: Bool
     public let destructive: Bool
+    /// The result carries a base64 image in `data` with its `format`. The CLI writes it to `--out`;
+    /// the MCP sidecar returns it as image content.
+    public let image: Bool
     /// One-line text rendering of a successful result for the CLI.
     public let render: @Sendable (JSONValue) -> String
     private let send: @Sendable (AgentClient, [String: JSONValue], Int?) async throws -> JSONValue
 
     init<Input, Output>(
         tool: String, command: [String], _ definition: Command<Input, Output>, summary: String,
-        fields: [Field] = [], destructive: Bool = false, render: @escaping @Sendable (JSONValue) -> String
+        fields: [Field] = [], destructive: Bool = false, image: Bool = false, render: @escaping @Sendable (JSONValue) -> String
     ) {
+        self.image = image
         self.tool = tool
         self.command = command
         self.method = definition.method
@@ -166,6 +170,8 @@ extension AgentOperation {
     private static let fixture = Field("fixture", kind: .string, required: true, flag: "--fixture",
                                        summary: "Registered fixture ID from capabilities.")
     private static let limit = Field("limit", kind: .integer(minimum: 1, maximum: 100), flag: "--limit", summary: "Page size.")
+    private static let window = Field("windowId", kind: .string, flag: "--window",
+                                      summary: "Window identifier, identifier prefix or title. Defaults to the key window.")
 
     private static func screenLine(_ screen: JSONValue?) -> String {
         let object = screen?.objectValue ?? [:]
@@ -256,6 +262,18 @@ extension AgentOperation {
             }.joined(separator: "\n")
         },
         AgentOperation(
+            tool: "operations", command: ["operations", "list"], OperationCommands.list,
+            summary: "List open screen, work and scenario spans with their age and any progress the app reports. Use it to see what the app is busy with before waiting."
+        ) { result in
+            let operations = result.arrayValue ?? []
+            guard !operations.isEmpty else { return "No open operations." }
+            return operations.map { item in
+                let object = item.objectValue ?? [:]
+                let progress = object["completed"]?.integerValue.map { done in "  \(done)/\(object["total"]?.integerValue.map(String.init) ?? "?")" } ?? ""
+                return "\(object["kind"]?.stringValue ?? "?") \(object["name"]?.stringValue ?? "?")  \(object["ageMs"]?.integerValue ?? 0) ms\(progress)  \(object["id"]?.stringValue ?? "")"
+            }.joined(separator: "\n")
+        },
+        AgentOperation(
             tool: "actions", command: ["actions", "list"], AppCommands.actions,
             summary: "List semantic actions, their input schemas, and whether each is enabled on the current screen."
         ) { result in
@@ -275,6 +293,53 @@ extension AgentOperation {
         ) { result in
             let object = result.objectValue ?? [:]
             return "\(object["actionId"]?.stringValue ?? "?") \(object["outcome"]?.stringValue ?? "?")  revision \(object["revision"]?.integerValue ?? 0)"
+        },
+        AgentOperation(
+            tool: "capture", command: ["ui", "capture"], UICommands.capture,
+            summary: "Render one of the app's windows to an image, in process, without Screen Recording permission. Use it to look at the real UI after setup. It shows whatever the window shows.",
+            fields: [window,
+                     Field("format", kind: .oneOf(["png", "jpeg"]), flag: "--format", summary: "png (default) or jpeg. Large captures switch to JPEG to fit the response limit."),
+                     Field("maxDimension", kind: .integer(minimum: 64, maximum: 4_096), flag: "--max-dimension", summary: "Longest image side in pixels (default 1600)."),
+                     Field("method", kind: .oneOf(["composite", "display"]), flag: "--method",
+                           summary: "composite (default): AppKit drawing plus the content of Liquid Glass views drawn in place. display: AppKit drawing only.")],
+            image: true
+        ) { result in
+            let object = result.objectValue ?? [:]
+            let size = "\(object["width"]?.integerValue ?? 0)×\(object["height"]?.integerValue ?? 0)"
+            let where_ = object["path"]?.stringValue.map { " → \($0)" } ?? "  (pass --out FILE to save it)"
+            return "\(object["title"]?.stringValue ?? "window")  \(size) \(object["format"]?.stringValue ?? "")  \(object["bytes"]?.integerValue ?? 0) bytes\(where_)"
+        },
+        AgentOperation(
+            tool: "ui_tree", command: ["ui", "tree"], UICommands.tree,
+            summary: "List a window's accessibility elements in process: role, identifier, label, value (secrets redacted), frame in window points and state. Checks identifiers and layout without an external accessibility client.",
+            fields: [window,
+                     Field("identifierPrefix", kind: .string, flag: "--prefix", summary: "Only elements whose identifier starts with this."),
+                     Field("onlyIdentified", kind: .boolean, flag: "--only-identified", summary: "Only elements with an accessibility identifier."),
+                     Field("maxDepth", kind: .integer(minimum: 1, maximum: 60), flag: "--max-depth", summary: "Deepest level to report."),
+                     Field("limit", kind: .integer(minimum: 1, maximum: 3_000), flag: "--limit", summary: "Most elements to return (default 800)."),
+                     Field("source", kind: .oneOf(["accessibility", "appkit", "views"]), flag: "--source",
+                           summary: "accessibility (default): the system accessibility tree, as VoiceOver and XCUITest see it. appkit: AppKit accessibility objects. views: the AppKit view hierarchy with class names, for layout and capture diagnosis.")]
+        ) { result in
+            let elements = result.objectValue?["elements"]?.arrayValue ?? []
+            return elements.map { element in
+                let object = element.objectValue ?? [:]
+                let indent = String(repeating: "  ", count: Int(object["depth"]?.integerValue ?? 0))
+                let frame = (object["frame"]?.arrayValue ?? []).compactMap { $0.doubleValue }.map { String(Int($0)) }.joined(separator: ",")
+                let text = [object["identifier"]?.stringValue.map { "#\($0)" }, object["label"]?.stringValue.map { "“\($0)”" },
+                            object["value"]?.stringValue.map { "= \($0)" }].compactMap { $0 }.joined(separator: " ")
+                return "\(indent)\(object["role"]?.stringValue ?? "?") \(text) [\(frame)]"
+            }.joined(separator: "\n")
+        },
+        AgentOperation(
+            tool: "press", command: ["ui", "press"], UICommands.press,
+            summary: "Perform the accessibility press action on the element with an identifier, in process. Closer to the user path than invoke, but not independent evidence: it does not prove hit testing. Use XCUITest for that.",
+            fields: [Field("identifier", kind: .string, required: true, flag: "--id", summary: "Accessibility identifier from ui_tree."),
+                     window,
+                     Field("index", kind: .integer(minimum: 0, maximum: 100), flag: "--index", summary: "Which match when several share the identifier.")],
+            destructive: true
+        ) { result in
+            let object = result.objectValue ?? [:]
+            return "Pressed \(object["identifier"]?.stringValue ?? "?") (\(object["role"]?.stringValue ?? "?"))  revision \(object["revision"]?.integerValue ?? 0)"
         }
     ]
 }

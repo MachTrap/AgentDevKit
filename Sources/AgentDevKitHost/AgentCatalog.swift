@@ -100,12 +100,16 @@ public struct AgentCatalog: Sendable {
     public var diagnosticCategories: [String]
     /// Extra typed commands for app needs the built-ins do not cover.
     public var commands: [AppCommand]
+    /// In-process UI tools to serve. Capture and tree are reads of the app's own windows; press is a
+    /// mutation. Captures show whatever the window shows, so enable them only for Testing builds.
+    public var ui: UIAccess
 
     public init(
         scopes: [String] = ["current-screen"], routes: [AgentRoute] = [], fixtures: [String] = [],
         fixtureArguments: [String: ObjectSchema] = [:], actions: [AgentAction] = [], conditions: [AgentCondition] = [], lifecycle: [LifecycleCapability] = [],
-        diagnosticCategories: [String] = [], commands: [AppCommand] = []
+        diagnosticCategories: [String] = [], commands: [AppCommand] = [], ui: UIAccess = []
     ) {
+        self.ui = ui
         self.scopes = scopes
         self.routes = routes
         self.fixtures = fixtures
@@ -127,6 +131,7 @@ public struct AgentCatalog: Sendable {
         visible.actions = []
         visible.lifecycle = lifecycle.filter { $0.kind != .scenario }
         visible.commands = commands.filter { !$0.mutating }
+        visible.ui.remove(.press)
         return visible
     }
 }

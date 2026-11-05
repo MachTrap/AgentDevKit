@@ -369,10 +369,12 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
         let methods = Set(AgentOperation.all.map(\.method))
         let commands = [AppCommands.prepare.method, AppCommands.load.method, AppCommands.open.method, AppCommands.snapshot.method,
                         AppCommands.observe.method, AppCommands.wait.method, AppCommands.events.method, AppCommands.diagnostics.method,
-                        AppCommands.actions.method, AppCommands.invoke.method]
+                        AppCommands.actions.method, AppCommands.invoke.method,
+                        UICommands.capture.method, UICommands.tree.method, UICommands.press.method, OperationCommands.list.method]
         #expect(methods == Set(commands))
         #expect(AgentOperation.all.count == commands.count)
-        #expect(AgentOperation.all.filter(\.mutating).map(\.tool).sorted() == ["fixtures", "invoke", "navigate", "prepare"])
+        #expect(AgentOperation.all.filter(\.mutating).map(\.tool).sorted() == ["fixtures", "invoke", "navigate", "prepare", "press"])
+        #expect(AgentOperation.all.filter(\.image).map(\.tool) == ["capture"])
     }
 
     @Test func declaredSecretsAreRedactedFromEverySnapshotAndFixtureField() async throws {
@@ -412,6 +414,24 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
             }
             #expect(pending?.code == .timeout)
             #expect(pending?.details?["hint"] == nil, "A screen that appeared but is still loading needs no hint.")
+        }
+    }
+
+    @Test func operationsListOpenSpansWithProgress() async throws {
+        try await ToyHost.run { toy in
+            let id = UUID()
+            await MainActor.run {
+                toy.app.runtime.begin(.work, name: "batch.import", scope: "app", id: id)
+                #expect(toy.app.runtime.progress(id: id, completed: 2, total: 5))
+                #expect(!toy.app.runtime.progress(id: UUID(), completed: 1), "Only open spans report progress.")
+            }
+            let operations = try await toy.call(OperationCommands.list, EmptyParameters())
+            let batch = try #require(operations.first { $0.id == id })
+            #expect(batch.name == "batch.import" && batch.completed == 2 && batch.total == 5)
+            let events = try await toy.call(AppCommands.events, EventsRequest(revision: 0))
+            #expect(events.events.contains { $0.type == "work.progress" })
+            await MainActor.run { _ = toy.app.runtime.end(id: id, outcome: .completed) }
+            #expect(try await toy.call(OperationCommands.list, EmptyParameters()).allSatisfy { $0.id != id })
         }
     }
 

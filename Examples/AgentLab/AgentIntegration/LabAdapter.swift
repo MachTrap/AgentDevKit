@@ -144,7 +144,8 @@ final class LabAdapter: AgentAdapter {
                 .init(kind: .work, name: "document.load"), .init(kind: .work, name: "workspace.save"),
                 .init(kind: .screen, name: "projects.form")
             ],
-            diagnosticCategories: ["storage", "document"]
+            diagnosticCategories: ["storage", "document"],
+            ui: .all
         )
     }
 

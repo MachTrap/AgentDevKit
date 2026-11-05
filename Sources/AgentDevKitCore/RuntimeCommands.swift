@@ -166,6 +166,14 @@ public struct RevisionJournal: Sendable {
     }
 
     /// Open spans of one kind, oldest first.
+    /// Every open span, oldest first.
+    public var openSpans: [OpenSpan] {
+        lifecycles.values.sorted { $0.started < $1.started }.map {
+            OpenSpan(id: $0.token.id, kind: $0.kind, name: $0.name, scope: $0.scope, parentId: $0.parentId,
+                     correlationId: $0.correlationId, started: $0.started)
+        }
+    }
+
     public func activeLifecycles(_ kind: LifecycleEvent.Kind) -> [(id: UUID, name: String)] {
         lifecycles.values.filter { $0.kind == kind }.sorted { $0.started < $1.started }.map { ($0.token.id, $0.name) }
     }
@@ -260,5 +268,48 @@ public struct ActionRequest: Codable, Sendable {
         self.actionId = actionId
         self.arguments = arguments
         self.expectedRevision = expectedRevision
+    }
+}
+
+/// A span that has begun and not ended.
+public struct OpenSpan: Sendable, Hashable {
+    public let id: UUID
+    public let kind: LifecycleEvent.Kind
+    public let name: String
+    public let scope: String
+    public let parentId: UUID?
+    public let correlationId: UUID?
+    public let started: ContinuousClock.Instant
+}
+
+public enum OperationCommands {
+    /// Lists open screen, work and scenario spans with their age and reported progress.
+    public static let list = Command<EmptyParameters, [OperationInfo]>("operations.list")
+}
+
+/// An open span as `operations.list` reports it.
+public struct OperationInfo: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let kind: LifecycleEvent.Kind
+    public let name: String
+    public let scope: String
+    public let parentId: UUID?
+    public let correlationId: UUID?
+    public let ageMs: Int
+    /// Units done, when the app reports progress.
+    public let completed: Int?
+    public let total: Int?
+
+    public init(id: UUID, kind: LifecycleEvent.Kind, name: String, scope: String, parentId: UUID?, correlationId: UUID?,
+                ageMs: Int, completed: Int?, total: Int?) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.scope = scope
+        self.parentId = parentId
+        self.correlationId = correlationId
+        self.ageMs = ageMs
+        self.completed = completed
+        self.total = total
     }
 }

@@ -66,15 +66,16 @@ private func tool(_ name: String, _ description: String, fields: [String: Value]
     )
 }
 
-private func result(_ payload: some Encodable, isError: Bool = false) throws -> CallTool.Result {
+private func result(_ payload: some Encodable, isError: Bool = false, image: (data: String, mimeType: String)? = nil) throws -> CallTool.Result {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let data = try encoder.encode(payload)
     let value = try JSONDecoder().decode(Value.self, from: data)
     // Resolve the SDK's nonthrowing Value initializer consistently across Swift versions.
     let makeResult: ([Tool.Content], Value?, Bool?, Metadata?) -> CallTool.Result = CallTool.Result.init
-    let content: Tool.Content = .text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)
-    return makeResult([content], value, isError, nil)
+    var content: [Tool.Content] = [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)]
+    if let image { content.insert(.image(data: image.data, mimeType: image.mimeType, annotations: nil, _meta: nil), at: 0) }
+    return makeResult(content, value, isError, nil)
 }
 
 private struct SessionList: Encodable {
@@ -104,7 +105,16 @@ private let endpoints: [Endpoint] = [
             throw Failure(.invalidParams, "Tool arguments do not match the schema.")
         }
         let client = try AgentClient(session: selector, at: location)
-        return try result(await operation.run(client, arguments, timeoutMs: timeoutMs))
+        let response = try await operation.run(client, arguments, timeoutMs: timeoutMs)
+        guard operation.image, case .object(var envelope) = response, case .object(var payload)? = envelope["result"],
+              let data = payload["data"]?.stringValue else {
+            return try result(response)
+        }
+        // Return the picture as image content, and the metadata without the base64 copy.
+        payload["data"] = nil
+        envelope["result"] = .object(payload)
+        let mimeType = payload["format"]?.stringValue == "jpeg" ? "image/jpeg" : "image/png"
+        return try result(JSONValue.object(envelope), image: (data, mimeType))
     }
 }
 

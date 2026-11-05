@@ -46,7 +46,9 @@ with subprocess.Popen(
         assert hello["serverInfo"]["version"] == version
         send("notifications/initialized")
         catalog = {tool["name"]: tool for tool in send("tools/list", request_id=2)["tools"]}
-        assert len(catalog) == 12
+        assert len(catalog) == 16
+        assert catalog["agentdevkit_press"]["annotations"]["destructiveHint"] is True
+        assert catalog["agentdevkit_capture"]["annotations"]["readOnlyHint"] is True
         assert catalog["agentdevkit_prepare"]["annotations"]["destructiveHint"] is True
         assert catalog["agentdevkit_fixtures"]["annotations"]["destructiveHint"] is True
         assert catalog["agentdevkit_state"]["annotations"]["readOnlyHint"] is True
@@ -58,7 +60,8 @@ with subprocess.Popen(
                 "name": "agentdevkit_" + name,
                 "arguments": {"sessionId": args.session_id, **params},
             }, request_id)
-            assert json.loads(reply["content"][0]["text"]) == reply["structuredContent"]
+            text = [item for item in reply["content"] if item["type"] == "text"]
+            assert len(text) == 1 and json.loads(text[0]["text"]) == reply["structuredContent"]
             return reply
 
         prepared = tool("prepare", 3, fixture="large-project-v1", route="projects.editor.inspector",
@@ -111,6 +114,22 @@ with subprocess.Popen(
         assert "Verified through MCP" not in json.dumps(delta)
         assert successful("navigate", 14, route="home")["screenId"] == "home"
 
+        # In-process UI tools: the agent sees the window and its accessibility tree, and presses a control.
+        captured = tool("capture", 15, maxDimension=800)
+        assert captured["isError"] is False
+        image = captured["content"][0]
+        assert image["type"] == "image" and image["mimeType"] in ("image/png", "image/jpeg") and len(image["data"]) > 1000
+        meta = captured["structuredContent"]["result"]
+        assert "data" not in meta and max(meta["width"], meta["height"]) <= 800
+        tree = successful("ui_tree", 16, onlyIdentified=True)
+        identifiers = {element.get("identifier") for element in tree["elements"]}
+        assert {"nav.projects.list", "screen.home"} <= identifiers, identifiers
+        operations = successful("operations", 19)
+        assert all({"id", "kind", "name", "ageMs"} <= set(item) for item in operations)
+        pressed = successful("press", 17, identifier="nav.projects.list")
+        assert pressed["role"] == "AXButton"
+        assert successful("wait", 18, condition="screen.ready", timeoutMs=2000)["screen"]["screenId"] == "projects.list"
+
         server.stdin.close()
         assert server.wait(timeout=4) == 0
         assert not server.stdout.read(), "Unexpected output after the MCP exchange"
@@ -119,4 +138,4 @@ with subprocess.Popen(
         if server.poll() is None:
             server.kill()
 
-print("Live MCP passed: handshake, every registered tool, bundle-ID selection, fixtures, real Inspector, CLI parity, semantic save, error and clean stdio exit.")
+print("Live MCP passed: handshake, every registered tool, bundle-ID selection, fixtures, real Inspector, CLI parity, semantic save, window capture as image content, accessibility tree, press, error and clean stdio exit.")

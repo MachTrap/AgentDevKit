@@ -8,16 +8,16 @@ v0.3 speaks wire protocol `agentdevkit/2`. Build the app and tools from the same
 
 ## Install the component you need
 
-The v0.4.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
+The v0.5.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
 
-- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.4.0](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
-- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.4.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
+- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.5.0](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
+- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.5.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.5.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
 - **CLI only.** Check out the tag and build the executable product. The root package has no external dependencies.
 - **MCP only.** Build the [separate MCP package](#build-the-mcp-sidecar) from the tag. It uses the client libraries directly.
 - **Examples.** Open the Xcode projects from the same tag and choose the Testing scheme described in the example's guide.
 
 ```sh
-git clone --branch v0.4.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
+git clone --branch v0.5.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
 cd AgentDevKit
 swift build -c release --product agentdevctl
 .build/release/agentdevctl --version
@@ -83,6 +83,19 @@ Testing profiles use isolated temporary storage. Pass `--agentdevkit-profile UUI
 Start with the revision from a state snapshot. `observe` returns fresh scoped state and a page of app-wide changes together. When `delta.hasMore` is true, continue from `delta.nextRevision` to drain the changes. When `resynced` is true, use the returned snapshot as the new baseline. Use `events since` when only the changes are needed. Timeouts report the open `blockers`. Add `--no-fail-on-timeout` to get `satisfied: false` instead of an error. Action invocations use the app's save logic, return an outcome and the new revision, and fail with `STALE_REVISION` when state moved after `--revision`. Retrying with the same request ID replays the original response. Exit codes: 2 invalid input, 3 session or connection, 4 app failure, 5 timeout, 6 version or identity mismatch.
 
 Register lifecycle names alongside each new feature. The bridge can then correlate screen open and close, work start and finish, and scenario start and finish with the same events you already read in `observe`.
+
+## See the window
+
+Apps that opt in with `AgentCatalog(ui: .all)` let agents look at their own windows, with no Screen Recording or Accessibility permission:
+
+```sh
+.build/debug/agentdevctl --session SESSION_ID ui capture --out window.png
+.build/debug/agentdevctl --session SESSION_ID ui tree --only-identified
+.build/debug/agentdevctl --session SESSION_ID ui press --id button.send
+.build/debug/agentdevctl --session SESSION_ID operations list
+```
+
+The MCP sidecar returns captures as image content, so the model sees the UI directly. Captures approximate Liquid Glass; check controls with `ui tree`. To add a Testing target to an app, start with `agentdevctl scaffold --app NAME`.
 
 ## Build the MCP sidecar
 

@@ -15,6 +15,11 @@ public struct AgentClient: Sendable {
     /// Request bounds published by the session.
     public var limits: SessionLimits { descriptor.limits ?? SessionLimits() }
 
+    /// How long the client keeps reading after the request deadline. The host answers TIMEOUT
+    /// with its blockers and hints at the deadline. On a loaded machine that answer can arrive a
+    /// little late, and dropping it would leave only a bare transport timeout.
+    public static let responseGraceMs = 1_000
+
     /// Live sessions at `location`, oldest first, including sessions that speak another protocol version.
     public static func sessions(at location: SessionLocation = .local) throws -> [SessionIdentity] {
         try discover(location).map(\.identity).sorted { $0.launchedAt < $1.launchedAt }
@@ -111,13 +116,14 @@ public struct AgentClient: Sendable {
                           details: ["limitBytes": .integer(Int64(limits.maxRequestBytes))])
         }
         let data: Data
+        let transportMs = timeoutMs + Self.responseGraceMs
         do {
             if let port = descriptor.port, let pin = descriptor.certificatePin {
-                data = try await Loopback.exchange(payload, port: port, pin: pin, timeoutMs: timeoutMs)
+                data = try await Loopback.exchange(payload, port: port, pin: pin, timeoutMs: transportMs)
             } else {
                 let directory = try SessionDirectory(id: identity.sessionId, source: location)
                 data = try await LocalSocket.exchange(payload, path: directory.socketPath,
-                                                      expectedPID: identity.pid, timeoutMs: timeoutMs)
+                                                      expectedPID: identity.pid, timeoutMs: transportMs)
             }
         } catch is CancellationError {
             throw CancellationError()

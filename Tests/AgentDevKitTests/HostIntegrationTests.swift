@@ -294,6 +294,20 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
         }
     }
 
+    @Test func answersThatArriveJustAfterTheDeadlineAreKept() async throws {
+        try await TestHost.run(limits: .init(maxConnections: 1, requestReadTimeoutMs: 300)) { test in
+            // An idle peer holds the only slot, so the request waits in the backlog past its
+            // own deadline, like a request to a busy app on a slow machine.
+            let peer = try connectRaw(try test.socketPath)
+            defer { close(peer) }
+            try await Task.sleep(for: .milliseconds(20))
+            let started = ContinuousClock.now
+            let reply = try await test.client().capabilities(timeoutMs: 150)
+            #expect(reply.ok)
+            #expect(started.duration(to: .now) > .milliseconds(150), "The answer came after the client deadline.")
+        }
+    }
+
     @Test func staleDescriptorIsNotDiscovered() async throws {
         let bundleId = "dev.agentdevkit.tests.stale." + UUID().uuidString
         let id = UUID()
