@@ -1,9 +1,14 @@
 # Diagnose bridge and UI access
 
-- **No session.** Confirm that the actual Testing build is running, its opt-in argument was supplied, and its bridge status is active. A Release build cannot publish a session. A crashed or relaunched process needs a fresh discovery result.
+- **No session (`SESSION_NOT_FOUND`).** Confirm that the actual Testing build is running, its opt-in argument was supplied, and its bridge status is active. A Release build cannot publish a session. A crashed or relaunched process needs a fresh discovery result. `SESSION_EXPIRED` means the selected process exited.
+- **Version mismatch (`UNSUPPORTED_VERSION`, exit 6).** `session list` shows each session's protocol. Use tools built from the same AgentDevKit release as the app, or rebuild the app. Follow the `remedy` in the error details. Never edit descriptors to force a match.
+- **Invalid launch argument.** The Testing app reports `Bridge failed: Unknown AgentDevKit launch argument` and stays off. Remove or correct the argument. App-owned `--agentdevkit-*` switches must be listed in `LaunchOptions.parse(appFlags:)`.
+- **Sandboxed app not listed.** `session list` does not scan app containers. Select the app with `--session BUNDLE_ID` or `--container BUNDLE_ID`. `socketPathTooLong` at startup means the container path exceeds 104 bytes; use a shorter Testing bundle ID, or an App Group.
 - **Sandbox source unavailable.** Confirm the source used by the running app. For an App Group, inspect both signatures and check the exact entitlement and socket path length. For loopback, verify the folder is accessible and owner-only, then use the app’s pairing UI again if its bookmark is stale. Never bypass certificate pinning.
-- **Multiple sessions or changed app.** Select the exact current UUID. Verify the bundle ID and build fingerprint. Re-discover after rebuilding or relaunching.
+- **Multiple sessions (`AMBIGUOUS_SESSION`) or changed app (`APP_INSTANCE_MISMATCH`).** Select the exact current UUID from the error details or `session list`. Verify the bundle ID and build fingerprint. Re-discover after rebuilding or relaunching.
 - **Permission denied.** Use read-only observations unless a test mutation is authorized. Confirm the isolated store and mutation opt-in. Never copy credentials into arguments or logs.
 - **Route or fixture unavailable.** Use capabilities from the selected session. If the app lacks the adapter, choose ordinary UI setup or add the smallest typed adapter within the requested scope.
-- **Timeout.** Inspect reported blockers and recent diagnostics. A timed-out route may already have changed app state. Take a snapshot before retrying a mutation.
+- **Navigation timeout with a `hint`.** The screen never reported its appearance for that presentation, even if the window looks right. Fix the app's appearance callback, for example `.onAppear` placed outside a changing `.id`, before retrying.
+- **Timeout.** Inspect the reported `blockers` array and recent diagnostics. A timed-out route may already have changed app state. Take a snapshot before retrying a mutation, or retry with the same request ID to receive the original response.
+- **`RESPONSE_TOO_LARGE` or `CONNECTION_LOST`.** Narrow the scope or page size. A lost connection may follow a committed mutation, so observe before retrying.
 - **GUI or AX unavailable.** Run the existing build, unit, or bridge checks and identify which UI evidence remains unavailable. Use regular Xcode/XCUITest or an authorized accessibility tool when the host supports it.

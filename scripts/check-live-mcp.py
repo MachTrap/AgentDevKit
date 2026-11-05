@@ -8,7 +8,7 @@ import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("session_id")
-parser.add_argument("--mcp", default="Tools/MCP/.build/debug/agentdevkit-mcp")
+parser.add_argument("--mcp", default="Tools/MCP/.build/release/agentdevkit-mcp")
 parser.add_argument("--cli", default=".build/debug/agentdevctl")
 args = parser.parse_args()
 flags = []
@@ -42,12 +42,16 @@ with subprocess.Popen(
             "capabilities": {},
         }, 1)
         assert hello["serverInfo"]["name"] == "agentdevkit"
-        assert hello["serverInfo"]["version"] == "0.2.0"
+        version = subprocess.check_output([args.cli, "--version"], text=True).strip()
+        assert hello["serverInfo"]["version"] == version
         send("notifications/initialized")
         catalog = {tool["name"]: tool for tool in send("tools/list", request_id=2)["tools"]}
-        assert len(catalog) == 11
+        assert len(catalog) == 12
         assert catalog["agentdevkit_prepare"]["annotations"]["destructiveHint"] is True
+        assert catalog["agentdevkit_fixtures"]["annotations"]["destructiveHint"] is True
         assert catalog["agentdevkit_state"]["annotations"]["readOnlyHint"] is True
+        assert "not a physical click" in catalog["agentdevkit_invoke"]["description"]
+        assert all("timeoutMs" in tool["inputSchema"]["properties"] for tool in catalog.values())
 
         def tool(name, request_id, **params):
             reply = send("tools/call", {
@@ -62,7 +66,7 @@ with subprocess.Popen(
         assert prepared["isError"] is False
         screen = prepared["structuredContent"]["result"]["screen"]
         assert screen["ready"] is True and screen["fields"]["nodeId"] == "node-42"
-        mcp_state = tool("state", 4, scope="current-screen")["structuredContent"]["result"]
+        mcp_state = tool("state", 4)["structuredContent"]["result"]
         cli_state = json.loads(subprocess.check_output([
             args.cli, *flags, "--session", args.session_id, "state", "--json",
         ]))["result"]
@@ -75,21 +79,32 @@ with subprocess.Popen(
         observation = tool("observe", 6, scope="current-screen", sinceRevision=screen["revision"])["structuredContent"]["result"]
         assert observation["screen"] == screen and observation["delta"]["events"] == []
 
+        def mcp_state_bundle():
+            return successful("session", 69)["bundleId"]
+
         def successful(name, request_id, **params):
             reply = tool(name, request_id, **params)
             assert reply["isError"] is False, reply
             return reply["structuredContent"]["result"]
 
         assert successful("session", 7)["sessionId"] == args.session_id.upper()
+        bundle_selected = send("tools/call", {"name": "agentdevkit_state", "arguments": {"sessionId": mcp_state_bundle()}}, 70)
+        assert bundle_selected["structuredContent"]["result"] == screen
         capabilities = successful("capabilities", 8)
         assert "large-project-v1" in capabilities["fixtures"]
         assert "inspector.save" in capabilities["actions"]
-        assert successful("wait", 9, condition="screen.ready", scope="current-screen")["satisfied"]
+        assert successful("wait", 9, condition="screen.ready", timeoutMs=1500)["satisfied"]
+        loaded = successful("fixtures", 90, fixture="large-project-v1")
+        assert loaded["fields"]["projectId"] == "fixture:large-project"
+        prepared = tool("prepare", 91, fixture="large-project-v1", route="projects.editor.inspector",
+                        context={"nodeId": "node-42"})
+        screen = prepared["structuredContent"]["result"]["screen"]
         assert any(action["id"] == "inspector.save" and action["enabled"] for action in successful("actions", 10))
         assert isinstance(successful("diagnostics", 11, limit=1), list)
         saved = successful("invoke", 12, actionId="inspector.save",
                            arguments={"name": "Verified through MCP"}, expectedRevision=screen["revision"])
-        assert saved["fields"]["nodeName"] == "Verified through MCP"
+        assert saved["outcome"] == "completed"
+        assert saved["screen"]["fields"]["nodeName"] == "Verified through MCP"
         delta = successful("events", 13, revision=screen["revision"])
         assert [event["type"] for event in delta["events"]] == ["work.started", "work.finished", "node.saved"]
         assert delta["events"][1]["lifecycle"]["outcome"] == "completed"
@@ -104,4 +119,4 @@ with subprocess.Popen(
         if server.poll() is None:
             server.kill()
 
-print("Live MCP passed: handshake, every registered tool, real Inspector, CLI parity, semantic save, error and clean stdio exit.")
+print("Live MCP passed: handshake, every registered tool, bundle-ID selection, fixtures, real Inspector, CLI parity, semantic save, error and clean stdio exit.")

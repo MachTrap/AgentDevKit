@@ -8,28 +8,36 @@ package struct SessionDescriptor: Codable, Sendable {
     package let auth: String
     package var port: UInt16?
     package var certificatePin: Data?
+    /// Absent in agentdevkit/1 descriptors.
+    package var limits: SessionLimits?
 
-    package init(identity: SessionIdentity, auth: String) {
+    package init(identity: SessionIdentity, auth: String, limits: SessionLimits? = nil) {
         self.identity = identity
         self.auth = auth
+        self.limits = limits
     }
 }
 
-package struct SessionDirectory: Sendable {
+public struct SessionDirectory: Sendable {
     private let url: URL
-    private let source: SessionSource
+    private let source: SessionLocation
 
-    package init(id: UUID, source: SessionSource = .local) throws {
+    package init(id: UUID, source: SessionLocation = .local) throws {
         self.source = source
         url = try Self.root(source).appendingPathComponent(Self.name(id, source), isDirectory: true)
     }
 
-    private static func name(_ id: UUID, _ source: SessionSource) -> String {
-        if case .appGroup = source { return String(id.uuidString.replacingOccurrences(of: "-", with: "").prefix(16)) }
-        return id.uuidString
+    private static func name(_ id: UUID, _ source: SessionLocation) -> String {
+        switch source {
+        case .appGroup, .appContainer:
+            // Container paths are long, so a shorter directory name keeps the socket address within 104 bytes.
+            return String(id.uuidString.replacingOccurrences(of: "-", with: "").prefix(16))
+        case .local, .pairingDirectory:
+            return id.uuidString
+        }
     }
 
-    private static func root(_ source: SessionSource) throws -> URL {
+    private static func root(_ source: SessionLocation) throws -> URL {
         switch source {
         case .local:
             return try localRoot()
@@ -41,11 +49,32 @@ package struct SessionDirectory: Sendable {
                   let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
             else { throw Failure(.sessionExpired, "App Group unavailable. Check signing team and App Group entitlement.") }
             return container.appendingPathComponent("a", isDirectory: true)
+        case .appContainer(let identifier):
+            return try containerRoot(identifier)
         case .pairingDirectory(let folder):
             do { try check(folder.path, type: S_IFDIR, mode: 0o700) }
             catch { throw Failure(.sessionExpired, "Pairing folder unavailable. Select an accessible folder owned by you with mode 0700.") }
             return folder.appendingPathComponent("adk", isDirectory: true)
         }
+    }
+
+    /// `~/Library/Containers/<id>/Data/a` under the user's real home. The sandboxed app creates it inside
+    /// its own container; unsandboxed tools read it there. Both sides compute the same absolute path.
+    private static func containerRoot(_ identifier: String) throws -> URL {
+        guard !identifier.isEmpty, identifier.utf8.count <= 255, !identifier.hasPrefix("."),
+              identifier.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)) }),
+              let home = homeOverride?.path ?? getpwuid(geteuid()).flatMap({ $0.pointee.pw_dir }).map({ String(cString: $0) })
+        else { throw Failure(.sessionNotFound, "App container identifier is invalid.") }
+        return URL(fileURLWithPath: home, isDirectory: true)
+            .appendingPathComponent("Library/Containers/\(identifier)/Data/a", isDirectory: true)
+    }
+
+    /// Replaces the user's home for container paths. Tests only.
+    @TaskLocal package static var homeOverride: URL?
+
+    /// The container ID of this process when it runs in the App Sandbox, otherwise nil.
+    package static var sandboxContainerID: String? {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"].flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private static func localRoot() throws -> URL {
@@ -92,7 +121,7 @@ package struct SessionDirectory: Sendable {
         rmdir(url.path)
     }
 
-    package static func discover(_ source: SessionSource = .local) throws -> [SessionDescriptor] {
+    package static func discover(_ source: SessionLocation = .local) throws -> [SessionDescriptor] {
         let root = try root(source)
         var info = stat()
         if lstat(root.path, &info) == -1 && errno == ENOENT { return [] }
@@ -103,7 +132,7 @@ package struct SessionDirectory: Sendable {
         }
     }
 
-    private init(url: URL, source: SessionSource) {
+    private init(url: URL, source: SessionLocation) {
         self.url = url
         self.source = source
     }
@@ -140,6 +169,11 @@ package struct SessionDirectory: Sendable {
         return Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000)
     }
 
+    /// Checks that a pairing folder is a directory owned by the current user with mode 0700, and is writable.
+    public static func validatePairingFolder(_ folder: URL) -> Bool {
+        (try? check(folder.path, type: S_IFDIR, mode: 0o700)) != nil && access(folder.path, W_OK | X_OK) == 0
+    }
+
     private static func check(_ path: String, type: mode_t, mode: mode_t) throws {
         var info = stat()
         guard lstat(path, &info) == 0, matches(info, type: type, mode: mode) else { throw SocketError.system }
@@ -151,10 +185,17 @@ package struct SessionDirectory: Sendable {
 }
 
 
-public enum SessionSource: Sendable {
+/// Where a session publishes its descriptor, and therefore which transport it uses.
+public enum SessionLocation: Sendable, Equatable {
+    /// The per-user temporary directory with a Unix socket. For unsandboxed Testing apps.
     case local
+    /// A signed App Group container with a Unix socket. The app and tools need the same group entitlement.
     case appGroup(String)
+    /// A user-selected 0700 folder with a pinned TLS listener on 127.0.0.1.
     case pairingDirectory(URL)
+    /// A Unix socket inside a sandboxed app's own container, `~/Library/Containers/<id>/Data/a`.
+    /// A sandboxed host chooses this automatically for `.local`; tools find it by bundle ID.
+    case appContainer(String)
 
     package var isLoopback: Bool {
         if case .pairingDirectory = self { return true }

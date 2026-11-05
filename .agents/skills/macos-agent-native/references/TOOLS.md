@@ -1,6 +1,8 @@
 # Tool commands
 
-Build the core package from the v0.2.0 checkout with `swift build --product agentdevctl`. Use the resulting `.build/debug/agentdevctl` or put it on your path. A Testing app must be running with its bridge explicitly enabled. AgentLab uses `--enable-agentdevkit`; to permit fixture, route, and save commands, also pass `--allow-agentdevkit-mutations`.
+Build the CLI from the v0.4.0 checkout with `swift build -c release --product agentdevctl`, then use `.build/release/agentdevctl` or put it on your path. Tools and app must come from the same release: v0.3 speaks `agentdevkit/2`.
+
+A Testing app must be running with its bridge explicitly enabled. AgentLab uses `--enable-agentdevkit`. To permit fixture, route and save commands, also pass `--allow-agentdevkit-mutations`.
 
 ```sh
 agentdevctl session list --json
@@ -9,8 +11,8 @@ agentdevctl --session SESSION_ID capabilities --json
 
 agentdevctl --session SESSION_ID scenario prepare \
   --fixture large-project-v1 --route projects.editor.inspector \
-  --context '{"nodeId":"node-42"}' --wait-ready --json
-agentdevctl --session SESSION_ID state --scope current-screen --json
+  --context '{"nodeId":"node-42"}' --json
+agentdevctl --session SESSION_ID state --json
 agentdevctl --session SESSION_ID wait --condition screen.ready --timeout-ms 1500 --json
 agentdevctl --session SESSION_ID observe --since REVISION --limit 20 --json
 agentdevctl --session SESSION_ID events since --revision REVISION --limit 20 --json
@@ -20,14 +22,64 @@ agentdevctl --session SESSION_ID action invoke --id inspector.save \
   --args '{"name":"Verified test edit"}' --revision REVISION --json
 ```
 
-AgentLab's route and fixture names are examples. Discover the actual target app's capability names. For standalone setup, use `fixtures load --fixture ID` or `navigation open --route ID`. Pass `--no-wait` to return an accepted transition and use the returned operation ID with `wait --condition operation.completed --operation UUID`. Use `wait --condition lifecycle.ended --operation UUID` to retrieve a retained span outcome after navigating elsewhere. The current wire maximum is 2 seconds per command.
+- **Names.** AgentLab's routes and fixtures are examples. Read the target app's capabilities for:
+  - route `contextSchema`;
+  - wait `conditions`;
+  - `diagnosticCategories`;
+  - effective `limits`, including `maxTimeoutMs`.
+- **Session selection.** `--session` takes a UUID, or a bundle ID that matches exactly one session.
+- **Scope.** `state`, `observe` and `wait` default to `--scope current-screen`.
+- **Timeouts.** Every command accepts `--timeout-ms`.
+- **Exit codes:**
 
-Use `observe` when you need both state and changes. A response with `resynced: true` supplies a fresh baseline. For paginated changes, continue with the delta's `nextRevision`. If `hasMore` is true, continue before claiming to have observed all retained changes. A stale cursor requires a fresh snapshot. A save with `--revision` fails with `CONFLICT` when the app state has moved.
+  | Code | Meaning |
+  | --- | --- |
+  | 2 | Invalid input |
+  | 3 | Session or connection |
+  | 4 | App failure |
+  | 5 | Timeout |
+  | 6 | Version or identity mismatch |
 
-For a sandboxed session, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same source for discovery and later commands. Discover again after relaunch because the session UUID rotates.
+- **Setup alone.** Use `fixtures load --fixture ID` or `navigation open --route ID`.
+- **Waiting on started work.** Pass `--no-wait` to get an accepted transition, then use its operation ID with `wait --condition operation.completed --operation UUID`.
+- **Finished spans.** `wait --condition lifecycle.ended --operation UUID` returns a retained span outcome even after you have navigated elsewhere.
+- **Checking without failing.** Add `--no-fail-on-timeout` to receive `satisfied: false` and the open `blockers` instead of a TIMEOUT error.
+- **Other conditions.** Pass arguments with `--args JSON`, or with `--field KEY --value JSON`.
+- **Long waits.** `wait --timeout-ms` accepts up to 120000. A wait longer than the session's `limits.maxTimeoutMs` runs as consecutive requests, and returns as soon as the condition holds. MCP `agentdevkit_wait` behaves the same way.
+- **Fixture arguments.** `fixtures load` and `scenario prepare` take `--fixture-args JSON` matching `capabilities.fixtureArguments[fixture]`, for example a test server's base URL.
+
+Use `observe` when you need both state and changes:
+
+- A response with `resynced: true` supplies a fresh baseline.
+- When paging, continue from the delta's `nextRevision`. If `hasMore` is true, keep reading before claiming you observed every retained change.
+- `action invoke --revision` fails with `STALE_REVISION` when app state moved. Read fresh state before retrying.
+- A repeated request ID returns the original response and does not run the command again.
+
+For scripted checks, drive the CLI from Python and parse one JSON envelope per call. Shell variables that hold a whole command are not split into words in zsh:
+
+```python
+import json, subprocess
+def run(*args):
+    out = subprocess.run(["agentdevctl", "--session", "BUNDLE_ID", *args, "--json"], capture_output=True, text=True)
+    return json.loads(out.stdout)   # check out.returncode against the documented exit codes
+```
+
+For a sandboxed app that publishes in its own container, select it by bundle ID with `--session BUNDLE_ID`, or put `--container BUNDLE_ID` before the command. `session list` does not scan containers. For App Group or paired loopback sessions, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
 
 ## MCP
 
-Build with `swift build --package-path Tools/MCP --force-resolved-versions -c release`. Use the absolute path to the built `agentdevkit-mcp` in the client's stdio server settings. The current lockfile requires Swift 6.2. Configure either `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` in the stdio server environment for sandboxed sessions. To locate the executable directory, add `--show-bin-path` to the build command.
+Build with `swift build --package-path Tools/MCP --force-resolved-versions -c release`. This needs Swift 6.2 or later. Add `--show-bin-path` to find the executable directory. Register the absolute path of `agentdevkit-mcp` as a stdio server in the client the user already uses. For example, Claude Code:
 
-Use `agentdevkit_session` first and pass the returned `sessionId` to subsequent tools. Then use `agentdevkit_capabilities`, `agentdevkit_prepare`, `agentdevkit_navigate`, `agentdevkit_state`, `agentdevkit_observe`, `agentdevkit_wait`, `agentdevkit_events`, `agentdevkit_diagnostics`, `agentdevkit_actions`, or `agentdevkit_invoke` as needed. Tool errors carry bridge codes in structured output. The MCP client's tool discovery is the schema reference.
+```sh
+claude mcp add agentdevkit -- /absolute/path/to/agentdevkit-mcp
+```
+
+For a container session, pass the bundle ID as `sessionId` or set `AGENTDEVKIT_CONTAINER`. For App Group or loopback sessions, set `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` in the server environment. Stdout carries only MCP frames.
+
+Call `agentdevkit_session` first, then pass a `sessionId` (UUID or unique bundle ID) to the other tools as needed:
+
+- `agentdevkit_capabilities`, `agentdevkit_prepare`, `agentdevkit_fixtures`, `agentdevkit_navigate`
+- `agentdevkit_state`, `agentdevkit_observe`, `agentdevkit_wait`, `agentdevkit_events`
+- `agentdevkit_diagnostics`, `agentdevkit_actions`, `agentdevkit_invoke`
+
+Every tool accepts `timeoutMs`. Tool errors carry the bridge error code in structured output. The CLI and the MCP tools are generated from one operation table, so their fields and defaults match.

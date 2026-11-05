@@ -2,48 +2,123 @@
 
 ## Target and lifecycle
 
-1. Locate the Xcode target, composition root, router, data store, and existing tests. Choose one screen and the real service or coordinator that already owns it.
-2. Add a dedicated Testing app target with its own bundle ID and store. Link the `AgentDevKitHost` and `AgentDevKitCore` products there. Keep the adapter source and package products out of the normal Debug and Release targets. Use the [v0.2.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.2.0). Preserve the shipping app’s entitlements and select a transport in the Testing composition root.
-3. In SwiftUI, start the host from a Testing-only application delegate or composition root. In AppKit, use the Testing target's existing `NSApplicationDelegate` and coordinator. Require an explicit launch argument or trusted test configuration. Call `stop()` when ending the session. Await startup and shutdown off the synchronous UI lifecycle path. In the framework checkout, `Examples/AppKitAdoption/TestingBridge.swift` shows a complete read-only AppKit adapter and asynchronous termination reply. Its native verifier compares the existing window controls with the live snapshot.
+1. Find the Xcode target, composition root, router, data store and existing tests. Pick one screen and the real service or coordinator that already owns it.
+2. Add a Testing app target with its own bundle ID and store.
+   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.4.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0).
+   - Keep the bridge source and package products out of the normal Debug and Release targets.
+   - Preserve the shipping app's entitlements.
+3. Start the bridge from a Testing-only composition root:
+   - **SwiftUI:** a Testing-only `NSApplicationDelegateAdaptor`.
+   - **AppKit:** the Testing target's existing `NSApplicationDelegate`.
 
-The current Swift API registers typed commands. For a read-only starting point, the following Testing-only function compiles with the package modules. Pass an existing main-actor adapter as `snapshot`.
+4. Make the Testing target Run-ready in Xcode:
+   - **Folders:** in Xcode 16 or later, use synchronized folder groups. The Testing target lists the app's source folder plus a `Testing` folder for the bridge files, so files you add later need no project edits.
+   - **Scheme:** give the Testing target a shared scheme whose Run arguments include `--enable-agentdevkit` (and `--allow-agentdevkit-mutations` for fixtures and actions). Pressing Run then starts the bridge.
+   - **Release guard:** add a Run Script phase that fails when `$CONFIGURATION` is not Debug, so the Testing target can never be archived.
+   - **Sandbox:** keep it on if the shipping app uses it. The bridge publishes in the app's own container.
+
+   `LaunchOptions.parse()` reads the explicit opt-in arguments `--enable-agentdevkit`, `--allow-agentdevkit-mutations`, `--agentdevkit-profile UUID` and `--agentdevkit-fixture ID`. It rejects other `--agentdevkit` arguments unless you pass them as `appFlags`. `AgentSession` starts the host, shows a status string, and implements `applicationShouldTerminate` so the session is withdrawn before exit.
+
+## Read-only adapter
+
+Conform one main-actor class to `AgentAdapter`. A read-only bridge needs only `snapshot(scope:)`. The library serves state, observe, events, diagnostics, actions and waits. This Testing-only example compiles against the package modules:
 
 ```swift
 import AgentDevKitCore
 import AgentDevKitHost
+import AppKit
 
 @MainActor
-func makeHost(
-    snapshot: @escaping @MainActor @Sendable (SnapshotRequest) throws -> ScreenState
-) -> AgentHost {
-    AgentHost(
-        commands: [
-            AppCommand(AppCommands.snapshot, parameterKeys: ["scope"]) { request, _ in
-                guard request.scope == "current-screen" else {
-                    throw Failure(.invalidParams, "Unknown scope.")
-                }
-                return try snapshot(request)
-            }
-        ],
-        scopes: ["current-screen"]
-    )
+final class DocumentsBridge: AgentAdapter {
+    private let session = AgentSession()
+    private let runtime = AgentRuntime()
+    private let selection: () -> String?
+
+    /// Pass a closure that reads the app's existing model. Do not copy state.
+    init(selection: @escaping () -> String?) { self.selection = selection }
+
+    func start() {
+        guard (try? LaunchOptions.parse())?.enabled == true else { return }
+        let host = AgentHost(adapter: self, runtime: runtime, catalog: AgentCatalog(scopes: ["current-screen"]))
+        session.start(host, readOnly: true)
+    }
+
+    /// Call from the model's change path, so revisions advance and waits re-evaluate.
+    func selectionChanged() {
+        runtime.record("selection.changed", scope: "current-screen", changedFields: ["selectedId"])
+    }
+
+    func snapshot(scope: String) throws -> ScreenSnapshot {
+        ScreenSnapshot(screenId: "documents", windowId: "main", ready: selection() != nil,
+                       fields: selection().map { ["selectedId": .string($0)] } ?? [:])
+    }
+
+    func terminate(_ app: NSApplication) -> NSApplication.TerminateReply { session.terminate(app) }
 }
 ```
 
-Start with `try await host.start()` after opt-in. Construct any mutating registration with `mutating: true`. Set `allowMutations: true` only when the test store opened successfully and the runner explicitly opted in. Fixture adapters replace deterministic test data using the app's own persistence and service boundaries. A route adapter should validate context before changing state. Observe actual SwiftUI view appearance or AppKit view/window lifecycle plus registered work before claiming readiness.
+Snapshots return explicit, bounded fields. Never reflect arbitrary properties. Include display names only when the test needs them, sanitized by the app and bounded in UTF-8 size. In AppKit, check that the window is loaded before reading its visibility. `Examples/AppKitAdoption/TestingBridge.swift` is a complete read-only AppKit example.
 
-Use explicit fields and stable accessibility identifiers. For revisions, write the event and update model state on the same actor. `ScreenState` carries `screenId`, `windowId`, `scope`, `ready`, `revision`, and a bounded field map. Use the model's real readiness gates. In AppKit, inspect an already-loaded window before reading its visibility. Prefer selection presence and stable IDs. Include display names only when intended for the test, sanitize them through the app, and bound their UTF-8 size.
+## Routes, fixtures and actions
 
-For each feature, agree on route and context, readiness, accessibility IDs, scoped state, and finite work names during implementation. Pair screen entry and exit at real view or controller presentation. Pair work and approved in-app scenarios at their owners, including failures and cancellation. Use `RevisionJournal.beginLifecycle` and `endLifecycle` on the state actor, and link child spans to their parent ID. Give events static names and omit user data. Register discoverable names through `AgentHost(lifecycle:)`. The v0.2.0 AgentLab example shows the integration in `LabRuntime.swift`.
+Declare everything in one `AgentCatalog`. The host builds both its method table and its capabilities from it, and validates every input before calling the adapter.
 
-## Select a Testing transport
+- **Routes:**
+  - Declare each as `AgentRoute(id, context: ObjectSchema([...]), windowId:, accessibilityId:, readinessGates:)`.
+  - `resolve(route:context:fixture:)` validates without changing state. When `fixture` is set, it validates against that fixture's data, which keeps the scenario preflight safe.
+  - `present(_:request:)` uses the app's normal navigation and returns a presentation ID.
+  - `readiness(of:)` reports `.ready`, `.pending(blockers:)`, `.failed(Failure)` or `.superseded`, based on actual view appearance and tracked work.
+  - Report appearance for every presentation. In SwiftUI, put `.onAppear` inside the identity that changes per presentation, as in `.onAppear { model.didAppear(id) }.id(id)`. A callback outside `.id` fires once, and every later navigation times out. A navigation timeout includes a `hint` when no screen appearance was recorded.
+  - The value `resolve` returns is the `NavigationTarget` associated type. Swift infers it from your method signatures, so an app type named `Destination` keeps working.
+  - Implement `currentPresentation` so `screen.ready` waits notice replacement.
+- **Fixtures:** list the IDs in the catalog. `loadFixture(_:context:)` replaces deterministic data through the app's own persistence, only in isolated storage, and returns summary fields. A fixture that needs inputs, such as the base URL of a test server, declares `fixtureArguments[id] = ObjectSchema(...)` and implements `loadFixture(_:arguments:context:)`. Tools pass `--fixture-args JSON`. Open storage with `TestingProfile(appName:profile:)`. Grant `allowMutations: true` only when storage opened and the runner passed the mutation opt-in.
+- **Actions:**
+  - Declare each as `AgentAction(id, scope:, input: ObjectSchema, as: Input.self, enabled:, run:)`.
+  - `run` returns `.completed`, or `.accepted(operationId:)` for tracked work that is still running.
+  - Actions are semantic. They never prove that a control is visible, hittable or focusable.
+- **Conditions:** add `AgentCondition`s for app-specific waits. Built-ins cover `screen.ready`, `work.quiescent`, `operation.completed`, `lifecycle.ended` and `state.field_equals`.
+- **Secrets and size:**
+  - Return tokens, passwords and other credential values from `secretValues()`. The host replaces each one with `<redacted>` in every snapshot field, fixture field and diagnostic message, so one missed field cannot leak them.
+  - Bound unlimited text, such as response bodies or logs, with `ScreenSnapshot.preview(text, maxBytes:)`.
 
-- **Unsandboxed:** Use `try await host.start()`.
-- **Same-team sandbox:** Use `try await host.start(transport: .appGroup(groupID))` and give the Testing app and tools the same signed App Group entitlement. Use a short group name to fit the complete Darwin socket address.
-- **Paired loopback:** Use `try await host.start(transport: .pairedLoopback(directory: folder, makeIdentity: makeIdentity))`. Supply a fresh `SecIdentity` per start, enable incoming connections on the Testing target, and hold the selected folder's security scope through `stop()`. Store only the bookmark in Testing preferences. Select a folder owned by the current user with mode `0700`. Stop the bridge before forgetting the folder.
+Read-only sessions hide routes, fixtures, actions and scenario lifecycle entries. They answer mutating methods with `PERMISSION_DENIED`. `Examples/AgentLab/AgentIntegration/LabAdapter.swift` is a complete mutation-enabled adapter.
 
-Use the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.2.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
+## Lifecycle events
+
+For each feature, agree on these during implementation: route and context, readiness, accessibility IDs, scoped state, and finite work names.
+
+Record boundaries on the `AgentRuntime`, on the main actor with the state they describe:
+
+- **Screen:** call `runtime.begin("screen", .screen, …)` at actual presentation and `runtime.end("screen", outcome:)` at departure.
+- **Work:** use a slot such as `"document"` at the owning service, and close it on success, failure, cancellation and replacement. For concurrent work, such as several requests in flight, begin each span with its operation ID and close it with `runtime.end(id:outcome:)`. Return that ID from an action as `.accepted(operationId:)`, so agents can wait on `operation.completed`.
+- **Errors:** use `runtime.withLifecycle` for scoped work that throws.
+
+Use static names, the presentation ID as the work span ID, and the scenario ID as the parent ID. Keep user data out of events and diagnostics. List the names in `catalog.lifecycle`. The library adds `scenario.prepare` itself. `Examples/AgentLab/AgentIntegration/LabEvents.swift` maps a whole model's changes in about 60 lines.
+
+## Select a Testing location
+
+- **Unsandboxed or sandboxed:** call `session.start(host, readOnly:)`. Unsandboxed builds publish at `.local`. In the App Sandbox the host switches to `.appContainer(bundleID)`, a Unix socket inside the app's own container. This needs no extra entitlement, team or folder. Tools find it with `--session BUNDLE_ID`. Keep the bundle ID short (about 45 characters) so the socket path fits in 104 bytes.
+- **Same-team sandbox:** call `session.start(host, at: .appGroup(groupID), readOnly:)`.
+  - Sign the Testing app and the tools with the same App Group entitlement.
+  - Use a short group ID so the Darwin socket path fits.
+- **Paired loopback:** call `session.startPaired(host, pairing: LoopbackPairing(), readOnly:, identity:)`.
+  - `identity` must create a fresh `SecIdentity` on every call.
+  - Enable incoming connections on the Testing target.
+  - `LoopbackPairing` stores only a security-scoped bookmark and holds the folder's scope until the session stops.
+  - Bind `session.pair()` and `session.forgetPairing()` to Testing-only controls.
+
+See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
 
 ## Verify the integration
 
-Build Testing and Release. In Testing, confirm authenticated identity, discover the real capabilities, exercise an allowed operation, and assert the target screen with XCUITest or external AX. Verify a mutation is denied in a read-only session. Inspect Release link inputs, dependencies, and binary symbols, and launch it with the same opt-in argument to confirm it publishes no endpoint. Record exact commands and observed results.
+1. Build Testing and Release.
+2. In Testing:
+   - confirm the authenticated identity;
+   - discover the real capabilities;
+   - exercise an allowed operation;
+   - assert the target screen with XCUITest or external AX;
+   - check that a read-only session denies a mutation.
+3. In Release:
+   - inspect link inputs, dependencies and binary symbols;
+   - launch it with the same opt-in argument and confirm it publishes no session.
+4. Record the exact commands and observed results.

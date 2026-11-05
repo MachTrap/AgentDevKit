@@ -21,7 +21,7 @@ def run(*arguments, exit_code=0):
 capabilities = run("capabilities")["result"]
 assert set(capabilities["actions"]) == {"inspector.save", "settings.appearance.save"}
 unknown = run("action", "invoke", "--id", "unregistered.save", "--args", "{}", exit_code=4)
-assert unknown["error"]["code"] == "UNKNOWN_METHOD"
+assert unknown["error"]["code"] == "ACTION_NOT_FOUND"
 
 scenario = ("scenario", "prepare", "--fixture")
 route = ("--route", "projects.editor.inspector")
@@ -30,7 +30,9 @@ assert pending["status"] == "accepted"
 screen = pending["result"]["screen"]
 assert screen["blockers"] == ["document.load"]
 timeout = run("wait", "--condition", "screen.ready", "--timeout-ms", "400", exit_code=5)
-assert timeout["error"]["details"] == {"blockers": "document.load"}
+assert timeout["error"]["details"] == {"blockers": ["document.load"]}
+unsatisfied = run("wait", "--condition", "screen.ready", "--timeout-ms", "400", "--no-fail-on-timeout")["result"]
+assert unsatisfied["satisfied"] is False and unsatisfied["blockers"] == ["document.load"]
 finished = run("wait", "--condition", "operation.completed", "--operation", screen["operationId"])["result"]
 assert finished["satisfied"]
 assert run("wait", "--condition", "screen.ready")["result"]["screen"]["ready"]
@@ -43,9 +45,14 @@ assert diagnostic["code"] == "DOCUMENT_LOAD_FAILED" and diagnostic["correlationI
 before = run("navigation", "open", *route)["result"]
 save = ("action", "invoke", "--id", "inspector.save", "--args", '{"name":"Saved through the action"}')
 updated = run(*save, "--revision", str(before["revision"]))
-after = updated["result"]
+assert updated["result"]["actionId"] == "inspector.save" and updated["result"]["outcome"] == "completed"
+after = updated["result"]["screen"]
+assert updated["result"]["revision"] == after["revision"]
 assert after["fields"]["nodeName"] == "Saved through the action"
-assert run(*save, "--revision", str(before["revision"]), exit_code=3)["error"]["code"] == "CONFLICT"
+stale = run(*save, "--revision", str(before["revision"]), exit_code=4)["error"]
+assert stale["code"] == "STALE_REVISION" and stale["details"]["latestRevision"] == after["revision"]
+invalid = run("action", "invoke", "--id", "inspector.save", "--args", '{"title":"x"}', exit_code=2)["error"]
+assert invalid["details"]["field"] == "arguments.title"
 assert run("state")["result"] == after
 events = run("events", "since", "--revision", str(before["revision"]), "--limit", "3")["result"]
 assert [event["type"] for event in events["events"]] == ["work.started", "work.finished", "node.saved"]

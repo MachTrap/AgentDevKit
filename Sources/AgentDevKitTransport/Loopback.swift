@@ -18,13 +18,15 @@ package enum Loopback {
     }
 
     package static func exchange(_ payload: Data, port: UInt16, pin: Data, timeoutMs: Int) async throws -> Data {
-        guard payload.count <= Wire.maxRequestBytes else { throw SocketError.oversized }
         let tls = tls()
+        let pinRejected = OSAllocatedUnfairLock(initialState: false)
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trust, complete in
             let trust = sec_trust_copy_ref(trust).takeRetainedValue()
             SecTrustSetNetworkFetchAllowed(trust, false)
             let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
-            complete(leaf.map { certificatePin($0) == pin } ?? false)
+            let matches = leaf.map { certificatePin($0) == pin } ?? false
+            if !matches { pinRejected.withLock { $0 = true } }
+            complete(matches)
         }, queue)
         let connection = NWConnection(
             host: .ipv4(address), port: NWEndpoint.Port(rawValue: port)!,
@@ -34,7 +36,9 @@ package enum Loopback {
         do {
             let response = try await timed(milliseconds: timeoutMs) {
                 try await withTaskCancellationHandler {
-                    try await connect(connection)
+                    do { try await connect(connection) }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { throw pinRejected.withLock { $0 } ? SocketError.peerMismatch : SocketError.connectFailed }
                     try await send(payload, connection)
                     return try await frame(connection, limit: Wire.maxFrameBytes)
                 } onCancel: { connection.cancel() }
@@ -101,6 +105,8 @@ package enum Loopback {
     }
 
     fileprivate static func send(_ payload: Data, _ connection: NWConnection) async throws {
+        guard !payload.isEmpty else { throw SocketError.emptyFrame }
+        guard payload.count <= Wire.maxFrameBytes else { throw SocketError.oversized }
         var size = UInt32(payload.count).bigEndian
         var frame = withUnsafeBytes(of: &size) { Data($0) }
         frame.append(payload)
@@ -122,9 +128,11 @@ package final class LoopbackListener: Sendable {
 
     private let connections = OSAllocatedUnfairLock(initialState: Admission())
     private let workers = DispatchGroup()
+    private let limits: ListenerLimits
     package let pin: Data
 
-    package init(identity: SecIdentity) throws {
+    package init(identity: SecIdentity, limits: ListenerLimits = ListenerLimits()) throws {
+        self.limits = limits
         var certificate: SecCertificate?
         guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess,
               let certificate, let networkIdentity = sec_identity_create(identity)
@@ -141,13 +149,14 @@ package final class LoopbackListener: Sendable {
         handle: @escaping @Sendable (Data, DispatchTime) async -> Data,
         reject: @escaping @Sendable (Failure) -> Data
     ) async throws -> UInt16 {
+        let limits = limits
         listener.newConnectionHandler = { [weak self] connection in
             guard let self,
                   case .hostPort(host: .ipv4(Loopback.address), port: _) = connection.endpoint
             else { connection.cancel(); return }
             let key = ObjectIdentifier(connection)
             let admitted = connections.withLock { admission in
-                guard !admission.closed, admission.active.count < LocalListener.concurrentConnections else { return false }
+                guard !admission.closed, admission.active.count < limits.connections else { return false }
                 admission.active[key] = connection
                 workers.enter()
                 return true
@@ -161,9 +170,9 @@ package final class LoopbackListener: Sendable {
                     self.connections.withLock { $0.active[key] = nil }
                     self.workers.leave()
                 }
-                try? await Loopback.timed(milliseconds: Wire.maxTimeoutMs) {
+                try? await Loopback.timed(milliseconds: limits.connectionTimeoutMs) {
                     try await withTaskCancellationHandler {
-                        try await Self.serve(connection, acceptedAt: acceptedAt, handle: handle, reject: reject)
+                        try await Self.serve(connection, acceptedAt: acceptedAt, limits: limits, handle: handle, reject: reject)
                     } onCancel: { connection.cancel() }
                 }
             }
@@ -202,13 +211,19 @@ package final class LoopbackListener: Sendable {
     }
 
     private static func serve(
-        _ connection: NWConnection, acceptedAt: DispatchTime,
+        _ connection: NWConnection, acceptedAt: DispatchTime, limits: ListenerLimits,
         handle: @escaping @Sendable (Data, DispatchTime) async -> Data,
         reject: @Sendable (Failure) -> Data
     ) async throws {
         let payload: Data
+        // The TLS handshake and request frame share the read budget, so an idle peer releases its slot early.
+        let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds - acceptedAt.uptimeNanoseconds) / 1_000_000)
+        let readBudget = max(1, limits.readTimeoutMs - elapsedMs)
+        let maxRequestBytes = limits.maxRequestBytes
         do {
-            payload = try await Loopback.frame(connection, limit: Wire.maxRequestBytes)
+            payload = try await Loopback.timed(milliseconds: readBudget) {
+                try await Loopback.frame(connection, limit: maxRequestBytes)
+            }
         } catch SocketError.oversized {
             return try await Loopback.send(reject(Failure(.frameTooLarge, "Request frame exceeds the limit.")), connection)
         } catch SocketError.emptyFrame {

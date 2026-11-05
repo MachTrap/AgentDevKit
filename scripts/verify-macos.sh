@@ -15,7 +15,7 @@ run_swift() {
 }
 run_swift test
 run_swift build -c release --product agentdevctl
-test "$(.build/release/agentdevctl --version)" = 0.2.0
+python3 scripts/check-version.py --cli .build/release/agentdevctl
 run_swift build --package-path Tools/MCP --force-resolved-versions -c release --product agentdevkit-mcp
 
 xcodebuild -project "$project" -scheme AgentLab-AgentTesting -destination "$destination" \

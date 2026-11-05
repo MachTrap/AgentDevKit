@@ -10,6 +10,11 @@ package enum SocketError: Error {
     case timedOut
     case oversized
     case emptyFrame
+    case pathTooLong
+    /// No listener accepted the connection.
+    case connectFailed
+    /// The connected peer is not the expected process, user or certificate.
+    case peerMismatch
 }
 
 package enum LocalSocket {
@@ -51,7 +56,7 @@ package enum LocalSocket {
         let pathOffset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path)!
         let length = pathOffset + pathBytes.count
         guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            throw SocketError.system
+            throw SocketError.pathTooLong
         }
         address.sun_family = sa_family_t(AF_UNIX)
         address.sun_len = UInt8(length)
@@ -149,13 +154,15 @@ package enum LocalSocket {
                 let response = try await offload {
                     let socket = handle.fileDescriptor
                     if cancelled.withLock({ $0 }) { throw CancellationError() }
-                    try connect(socket, path: path, until: deadline)
+                    do { try connect(socket, path: path, until: deadline) }
+                    catch SocketError.timedOut { throw SocketError.timedOut }
+                    catch { throw SocketError.connectFailed }
                     if cancelled.withLock({ $0 }) { throw CancellationError() }
-                    try verifyPeer(socket)
+                    do { try verifyPeer(socket) } catch { throw SocketError.peerMismatch }
                     var peerPID: pid_t = 0
                     var peerLength = socklen_t(MemoryLayout<pid_t>.size)
                     guard getsockopt(socket, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &peerLength) == 0,
-                          peerPID == expectedPID else { throw SocketError.disconnected }
+                          peerPID == expectedPID else { throw SocketError.peerMismatch }
                     try writeFrame(payload, to: socket, until: deadline)
                     return try readFrame(socket, maxBytes: Wire.maxFrameBytes, until: deadline)
                 }

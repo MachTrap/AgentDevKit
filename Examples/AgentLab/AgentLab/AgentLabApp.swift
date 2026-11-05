@@ -14,17 +14,17 @@ struct AgentLabApp: App {
             WorkspaceView(model: testingSession.model)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     HStack {
-                        Label(testingSession.status, systemImage: "hammer")
+                        Label(testingSession.bridge.statusText, systemImage: "hammer")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("status.agent-testing")
                         Spacer()
                         #if ADK_LOOPBACK
-                        if testingSession.pairingEnabled {
-                            if testingSession.paired {
-                                Button("Forget Pairing", action: testingSession.forgetPairingFolder)
+                        if testingSession.bridge.usesPairing {
+                            if testingSession.bridge.paired {
+                                Button("Forget Pairing", action: testingSession.bridge.forgetPairing)
                             } else {
-                                Button("Pair Folder…", action: testingSession.choosePairingFolder)
+                                Button("Pair Folder…", action: testingSession.bridge.pair)
                             }
                         }
                         #endif

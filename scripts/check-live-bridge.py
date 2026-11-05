@@ -24,6 +24,8 @@ parser.add_argument("--cli", default=".build/debug/agentdevctl")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--app-group")
 source.add_argument("--pairing-dir", type=Path)
+source.add_argument("--container", help="Bundle ID of a sandboxed Testing app that publishes in its own container")
+parser.add_argument("--bundle", help="Expected bundle ID, when it differs from the default for the location")
 args = parser.parse_args()
 session_id = str(args.session_id).upper()
 flags = []
@@ -31,6 +33,8 @@ if args.app_group:
     flags = ["--app-group", args.app_group]
 elif args.pairing_dir:
     flags = ["--pairing-dir", str(args.pairing_dir)]
+elif args.container:
+    flags = ["--container", args.container]
 cli = [args.cli, *flags, "--session", session_id]
 identity = json.loads(subprocess.check_output(cli + ["session", "ping", "--json"]))["result"]
 bundle = "dev.agentdevkit.AgentTesting"
@@ -38,7 +42,7 @@ if args.app_group:
     bundle = "dev.agentdevkit.AgentLab.AppGroupTesting"
 elif args.pairing_dir:
     bundle = "dev.agentdevkit.AgentLab.LoopbackTesting"
-assert identity["bundleId"] == bundle
+assert identity["bundleId"] == (args.bundle or args.container or bundle)
 capabilities = json.loads(subprocess.check_output(cli + ["capabilities", "--json"]))["result"]
 assert capabilities["app"] == identity
 assert capabilities["readOnly"]
@@ -52,6 +56,8 @@ if args.app_group:
     directory = Path.home() / "Library" / "Group Containers" / args.app_group / "a" / session_id.replace("-", "")[:16]
 elif args.pairing_dir:
     directory = args.pairing_dir / "adk" / session_id
+elif args.container:
+    directory = Path.home() / "Library" / "Containers" / args.container / "Data" / "a" / session_id.replace("-", "")[:16]
 else:
     temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"], text=True).strip())
     directory = temp / "adk" / session_id
@@ -111,7 +117,7 @@ if args.pairing_dir:
     try:
         replace_descriptor(json.dumps(wrong).encode())
         failed = subprocess.run(cli + ["session", "ping", "--json"], capture_output=True)
-        assert failed.returncode != 0 and b"SESSION_EXPIRED" in failed.stdout, failed
+        assert failed.returncode == 6 and b"APP_INSTANCE_MISMATCH" in failed.stdout, failed
     finally:
         replace_descriptor(descriptor_bytes)
 
@@ -128,7 +134,7 @@ if args.pairing_dir:
 
 def payload_for(**overrides):
     envelope = {
-        "protocol": "agentdevkit/1", "requestId": str(uuid.uuid4()), "sessionId": session_id,
+        "protocol": "agentdevkit/2", "requestId": str(uuid.uuid4()), "sessionId": session_id,
         "auth": credential, "method": "system.hello", "params": {}, "timeoutMs": 2000,
     }
     envelope.update(overrides)
@@ -141,18 +147,28 @@ def rejected(reply, code):
     assert reply["ok"] is False and reply["error"]["code"] == code
     assert "result" not in reply and credential not in json.dumps(reply)
 
-rejected(request(auth="X" * 44), "AUTH_REQUIRED")
+unauthenticated = request(auth="X" * 44)
+rejected(unauthenticated, "AUTH_REQUIRED")
+assert "sessionId" not in unauthenticated and "requestId" not in unauthenticated
 rejected(request(sessionId=str(uuid.uuid4())), "AUTH_REQUIRED")
-rejected(request(protocol="agentdevkit/999"), "UNSUPPORTED_VERSION")
+for old in ["agentdevkit/1", "agentdevkit/999"]:
+    mismatch = request(protocol=old)
+    rejected(mismatch, "UNSUPPORTED_VERSION")
+    assert mismatch["error"]["details"]["supported"] == ["agentdevkit/2"]
+hello = request()
+assert hello["sessionId"] == session_id and hello["pid"] == identity["pid"]
 rejected(request(method="unregistered.method"), "UNKNOWN_METHOD")
 rejected(request(method="fixtures.load", params={"fixture": "basic-project-v1"}), "PERMISSION_DENIED")
 rejected(request(method="actions.invoke", params={"actionId": "inspector.save", "arguments": {"name": "Rejected"}}), "PERMISSION_DENIED")
 rejected(request(params={"unexpected": True}), "INVALID_PARAMS")
 rejected(probe(b"{"), "INVALID_PARAMS")
 rejected(probe(b"", length=4097), "FRAME_TOO_LARGE")
+# A repeated request ID replays the original response. A different request under that ID is rejected.
 request_id = str(uuid.uuid4())
-assert request(requestId=request_id)["result"] == identity
-rejected(request(requestId=request_id), "CONFLICT")
+first = request(requestId=request_id)
+assert first["result"] == identity
+assert request(requestId=request_id) == first
+rejected(request(requestId=request_id, method="system.capabilities"), "CONFLICT")
 with connect() as abandoned:
     abandoned.sendall(struct.pack(">I", 300) + b"{")
 with ThreadPoolExecutor(max_workers=4) as pool:
@@ -166,7 +182,7 @@ try:
         waiters.append(connection)
         payload = payload_for(
             method="runtime.wait",
-            params={"condition": "state.field_equals", "scope": "app", "field": "projectCount", "value": -1},
+            params={"condition": "state.field_equals", "scope": "app", "arguments": {"field": "projectCount", "value": -1}},
         )
         connection.sendall(struct.pack(">I", len(payload)) + payload)
     time.sleep(0.2)
@@ -186,4 +202,4 @@ finally:
     for connection in waiters:
         connection.close()
 
-print("Live checks passed: identity, capabilities, permissions, authentication, version, allowlist, schema, malformed and oversized frames, replay, interrupted peer, four concurrent requests, disconnected wait cancellation.")
+print("Live checks passed: identity, capabilities, permissions, authentication, version, response identity, allowlist, schema, malformed and oversized frames, replay cache, interrupted peer, four concurrent requests, disconnected wait cancellation.")

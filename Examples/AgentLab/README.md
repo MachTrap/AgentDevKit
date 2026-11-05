@@ -4,11 +4,13 @@ AgentLab is a native SwiftUI project organizer and editor that demonstrates Agen
 
 ## Run
 
+The Testing integration is three files: `AgentIntegration/LabAdapter.swift` (the `AgentAdapter` and `AgentCatalog`), `LabEvents.swift` (model changes to events and spans) and `TestingSession.swift` (launch options, isolated `TestingProfile` storage and the `AgentSession`).
+
 Follow the [quick start](../../README.md#quick-start) from the repository root. Use the `AgentLab-AgentTesting` scheme for bridge sessions. The ordinary Debug and Release targets exclude the bridge. Testing fixtures use isolated storage. Pass `--agentdevkit-profile UUID` to reopen the same test profile.
 
 ## Sandboxed Testing
 
-Build from the [v0.2.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.2.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
+Build from the [v0.4.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
 
 To build and sign from a shell, choose the development identity and the team it belongs to. Set `lane=AppGroup` or `lane=Loopback`. This uses the same entitlements as the Xcode targets.
 
@@ -74,7 +76,7 @@ On the first enabled launch, select that directory in the app's folder panel bef
 - For loopback, repeat the launch three times after the first pairing. Confirm the panel stays closed, UUIDs and pins rotate, and the tools continue working with the same folder. Check **Forget Pairing**, a stale descriptor after a crash, and a folder whose access was revoked.
 - Record the macOS version, the build and verification commands, and observed outcomes before releasing.
 
-The signed v0.2 desktop run used macOS 27.2 and Xcode 27.2. Both lanes passed the CLI and MCP probes. External Accessibility showed `screen.editor.inspector`, `field.node.name` and `button.inspector.save` for Node 42 in each window. Loopback passed three relaunches with the same folder using tools signed by a different team. The deployment target is macOS 14.0.
+The signed lanes were last verified on v0.2 with macOS 27.2 and Xcode 27.2. v0.3 builds both lanes, but their signed desktop run is still pending. In the v0.2 run, both lanes passed the CLI and MCP probes. External Accessibility showed `screen.editor.inspector`, `field.node.name` and `button.inspector.save` for Node 42 in each window. Loopback passed three relaunches with the same folder using tools signed by a different team. The deployment target is macOS 14.0.
 
 ## Navigate and verify
 
