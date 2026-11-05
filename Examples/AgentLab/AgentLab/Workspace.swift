@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -68,6 +69,7 @@ enum LabRoute: String, CaseIterable {
     case settings
     case advanced = "settings.advanced"
     case appearance = "settings.advanced.appearance"
+    case controls = "settings.controls"
 
     static let windowID = "main"
 
@@ -116,7 +118,28 @@ final class LabModel {
         case saveStarted = "workspace.save.started"
         case saveFinished = "workspace.save.finished"
         case saveFailed = "workspace.save.failed"
+        case controlChanged = "controls.changed"
+        case queueChanged = "queue.changed"
+        case highlightChanged = "queue.highlight.changed"
+        case hoverChanged = "hover.changed"
+        case popoverChanged = "controls.popover.changed"
+        case importFinished = "import.finished"
     }
+
+    enum Density: String, CaseIterable, Identifiable {
+        case compact, regular, spacious
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
+    }
+
+    struct QueueItem: Identifiable, Equatable {
+        let name: String
+        let bytes: Int64
+        var queued = false
+        var id: String { name }
+    }
+
+    static let detailNames = ["Minimal", "Simple", "Standard", "Detailed", "Complete"]
 
     enum EditError: Error { case invalidNode, inactiveNode, invalidProject, storageUnavailable }
     typealias DocumentLoader = @MainActor (Workspace.Project) async throws -> Workspace.Project
@@ -138,6 +161,126 @@ final class LabModel {
     private(set) var appearanceDraft: Workspace.Appearance?
     var previewAppearance: Workspace.Appearance { appearanceDraft ?? workspace.appearance }
     var appearanceDirty: Bool { appearanceDraft != nil }
+
+    // MARK: Controls screen state
+
+    private(set) var detailLevel = 2.0
+    var detailName: String { Self.detailNames[Int(detailLevel.rounded()).clamped(0, Self.detailNames.count - 1)] }
+    private(set) var density = Density.regular
+    private(set) var advancedExpanded = false
+    private(set) var showHidden = false
+    private(set) var queue: [QueueItem] = [
+        QueueItem(name: "Downloads", bytes: 4_200_000_000), QueueItem(name: "Desktop", bytes: 1_100_000_000),
+        QueueItem(name: "Documents", bytes: 760_000_000),
+    ]
+    /// Folders drawn on the map. Queued folders leave the map.
+    private(set) var mapItems = ["Downloads", "Desktop", "Documents"]
+    private(set) var highlighted = 0
+    private(set) var hovered: String?
+    private(set) var displayPopoverShown = false
+    private(set) var importedFolder: String?
+    /// Testing builds can seed the stale-map bug: a queued folder stays on the map.
+    var mapBugEnabled = false
+
+    var queuedNames: [String] { queue.filter(\.queued).map(\.name) }
+    var queuedVisibleOnMap: [String] { queuedNames.filter(mapItems.contains) }
+
+    func setDetail(_ value: Double) {
+        let level = value.rounded().clamped(0, 4)
+        guard level != detailLevel else { return }
+        detailLevel = level
+        emit(.controlChanged)
+    }
+
+    func setDensity(_ value: Density) {
+        guard value != density else { return }
+        density = value
+        emit(.controlChanged)
+    }
+
+    func setAdvanced(_ expanded: Bool) {
+        guard expanded != advancedExpanded else { return }
+        advancedExpanded = expanded
+        emit(.controlChanged)
+    }
+
+    func setShowHidden(_ value: Bool) {
+        guard value != showHidden else { return }
+        showHidden = value
+        emit(.controlChanged)
+    }
+
+    func toggleQueue(_ name: String) {
+        guard let index = queue.firstIndex(where: { $0.name == name }) else { return }
+        queue[index].queued.toggle()
+        if queue[index].queued {
+            if !mapBugEnabled { mapItems.removeAll { $0 == name } }
+        } else if !mapItems.contains(name) {
+            mapItems.append(name)
+            mapItems.sort { a, b in queue.firstIndex { $0.name == a }! < queue.firstIndex { $0.name == b }! }
+        }
+        emit(.queueChanged)
+    }
+
+    /// Rebuilds the map from the queue, which repairs a seeded stale map.
+    func rebuildMap() {
+        mapItems = queue.filter { !$0.queued }.map(\.name)
+        emit(.queueChanged)
+    }
+
+    func resetControls() {
+        detailLevel = 2
+        density = .regular
+        advancedExpanded = false
+        showHidden = false
+        queue = queue.map { QueueItem(name: $0.name, bytes: $0.bytes) }
+        mapItems = queue.map(\.name)
+        highlighted = 0
+        hovered = nil
+        importedFolder = nil
+        mapBugEnabled = false
+        emit(.controlChanged)
+    }
+
+    func moveHighlight(_ offset: Int) {
+        let next = (highlighted + offset).clamped(0, queue.count - 1)
+        guard next != highlighted else { return }
+        highlighted = next
+        emit(.highlightChanged)
+    }
+
+    func setHovered(_ name: String?) {
+        guard name != hovered else { return }
+        hovered = name
+        emit(.hoverChanged)
+    }
+
+    func setDisplayPopover(_ shown: Bool) {
+        guard shown != displayPopoverShown else { return }
+        displayPopoverShown = shown
+        emit(.popoverChanged)
+    }
+
+    /// Asks for a folder to import with an open panel attached to the main window. Returns false when cancelled.
+    func chooseImportFolder() async -> Bool {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose a folder to import."
+        let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
+            if let window = NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+                panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+            } else {
+                panel.begin { continuation.resume(returning: $0) }
+            }
+        }
+        guard response == .OK, let url = panel.url else { return false }
+        importedFolder = url.lastPathComponent
+        emit(.importFinished)
+        return true
+    }
 
     var node: Workspace.Node? {
         project?.nodes.first { $0.id == destination.nodeId }
@@ -333,4 +476,8 @@ final class LabModel {
     private func emit(_ change: Change, correlationId: UUID? = nil, operationID: UUID? = nil) {
         onChange?(change, destination.route, operationID ?? presentationID, correlationId, scenarioId)
     }
+}
+
+extension Comparable {
+    func clamped(_ lower: Self, _ upper: Self) -> Self { min(max(self, lower), upper) }
 }

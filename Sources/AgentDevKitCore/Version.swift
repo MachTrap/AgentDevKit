@@ -1,4 +1,4 @@
 /// The single source of the library, CLI and MCP sidecar version.
 public enum AgentDevKitVersion {
-    public static let current = "0.5.0"
+    public static let current = "0.7.0"
 }

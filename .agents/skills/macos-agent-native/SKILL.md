@@ -2,7 +2,7 @@
 name: macos-agent-native
 description: Use when integrating AgentDevKit into a SwiftUI or AppKit macOS app, or when reproducing a bug or verifying a feature in a running native app using a test fixture, deep route, or scoped state. Apply when UI setup or distinguishing model state from rendered behavior is part of the task.
 metadata:
-  version: "0.5.0"
+  version: "0.7.0"
 ---
 
 # Agent-native macOS development
@@ -14,7 +14,9 @@ Use the real app and choose evidence for the behavior under test.
 - **Choose a reproduction and verification path** using [workflows](references/WORKFLOWS.md). Use fixture and route setup for a deep screen. Use real UI input for transitions, focus, clickability and user-path regressions.
 - **Handle missing tools or a failed connection** using [troubleshooting](references/TROUBLESHOOTING.md). Preserve authentication and use ordinary Xcode, accessibility, or existing tests when the bridge is unavailable.
 
-When capabilities list `ui`, look at the result: `ui capture` shows the real window and `ui tree` its accessibility identifiers and frames, with no extra permission. Treat them as in-process evidence, separate from XCUITest.
+Start the app with `agentdevctl launch PATH.app --mutations --replace` and, if no session appears, `agentdevctl doctor PATH.app`. Set `AGENTDEVKIT_SESSION` once instead of repeating `--session`. Read one value with `state --field NAME` and wait with `wait --until 'NAME=VALUE'`. When an ID is wrong, the error names the closest valid one and a runnable example.
+
+When capabilities list `ui`, look at the result: `ui capture` shows the main window with its sheets, popovers and alerts, `ui tree` its elements with values and paths, and `ui set`/`ui choose`/`ui expand` drive real controls, with no extra permission. Treat them as in-process evidence, separate from XCUITest. Slow work and panels answer `accepted`; follow them with `--wait` or `operations status`. Turn a reproduced bug into a recipe (`recipe run`) and, when it is drift, an invariant.
 
 Prefer a composed setup, a scoped snapshot, and combined observation after that snapshot's revision. Use named waits for tracked work. On `STALE_REVISION`, take a fresh snapshot. Expand diagnostics only when a failure calls for it.
 

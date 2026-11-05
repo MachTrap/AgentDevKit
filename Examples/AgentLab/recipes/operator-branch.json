@@ -1,0 +1,12 @@
+{
+  "name": "operator-branch",
+  "fixture": "basic-project-v1",
+  "route": "settings.controls",
+  "steps": [
+    {"ask": {"question": "Is the Downloads row checked?", "options": ["Yes", "No"], "answerTimeoutMs": 60000},
+     "then": {
+       "Yes": [{"assert": {"field": "queued", "contains": "Downloads"}}],
+       "No": [{"assert": {"field": "queued", "notContains": "Downloads"}}]
+     }}
+  ]
+}

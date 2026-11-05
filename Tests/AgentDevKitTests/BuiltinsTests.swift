@@ -363,18 +363,23 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
         let params = try wait.params(["condition": "operation.completed", "arguments.operationId": .string(operation)])
         #expect(params["scope"] == "current-screen")
         #expect(params["arguments"] == ["operationId": .string(operation)])
-        #expect(throws: Failure.self) { try wait.params(["scope": "current-screen"]) }
+        #expect(throws: Failure.self) { try wait.params(["condition": 5]) }
 
         // Every app-facing command has exactly one shared operation.
         let methods = Set(AgentOperation.all.map(\.method))
         let commands = [AppCommands.prepare.method, AppCommands.load.method, AppCommands.open.method, AppCommands.snapshot.method,
                         AppCommands.observe.method, AppCommands.wait.method, AppCommands.events.method, AppCommands.diagnostics.method,
                         AppCommands.actions.method, AppCommands.invoke.method,
-                        UICommands.capture.method, UICommands.tree.method, UICommands.press.method, OperationCommands.list.method]
+                        UICommands.capture.method, UICommands.tree.method, UICommands.press.method, OperationCommands.list.method,
+                        OperationCommands.status.method, UICommands.surfaces.method, UICommands.snapshot.method, UICommands.perform.method,
+                        UICommands.key.method, UICommands.hover.method, UICommands.scroll.method, InvariantCommands.list.method,
+                        OperatorCommands.ask.method, OperatorCommands.answer.method, ExperimentCommands.run.method, PrivacyCommands.status.method]
         #expect(methods == Set(commands))
         #expect(AgentOperation.all.count == commands.count)
-        #expect(AgentOperation.all.filter(\.mutating).map(\.tool).sorted() == ["fixtures", "invoke", "navigate", "prepare", "press"])
-        #expect(AgentOperation.all.filter(\.image).map(\.tool) == ["capture"])
+        #expect(Set(AgentOperation.all.map(\.tool)).count == AgentOperation.all.count, "MCP tool names are unique.")
+        #expect(AgentOperation.all.filter(\.mutating).map(\.tool).sorted()
+                == ["fixtures", "invoke", "navigate", "operator_ask", "prepare", "press", "ui_hover", "ui_key", "ui_perform", "ui_scroll"])
+        #expect(AgentOperation.all.filter(\.image).map(\.tool) == ["capture", "ui_snapshot"])
     }
 
     @Test func declaredSecretsAreRedactedFromEverySnapshotAndFixtureField() async throws {
@@ -409,11 +414,13 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
             #expect(timeout?.code == .timeout)
             #expect(timeout?.details?["hint"]?.stringValue?.contains("onAppear") == true)
             await MainActor.run { toy.app.loadDelay = .seconds(5) }
-            let pending = await failure {
-                try await toy.call(AppCommands.prepare, PrepareScenario(fixture: "two-items-v1", route: "detail", context: ["item": "a"]), timeoutMs: 400)
-            }
-            #expect(pending?.code == .timeout)
-            #expect(pending?.details?["hint"] == nil, "A screen that appeared but is still loading needs no hint.")
+            // Since v0.6 a preparation that outlasts its deadline is tracked instead of failing with TIMEOUT.
+            let pending = try await toy.client.call(AppCommands.prepare,
+                                                    PrepareScenario(fixture: "two-items-v1", route: "detail", context: ["item": "a"]), timeoutMs: 400)
+            #expect(pending.status == .accepted)
+            let operation = try #require(pending.result?.operationId)
+            let status = try await toy.call(OperationCommands.status, OperationStatusRequest(operationId: operation))
+            #expect(status.state == .pending)
         }
     }
 

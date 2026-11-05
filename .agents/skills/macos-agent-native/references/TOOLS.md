@@ -1,87 +1,101 @@
 # Tool commands
 
-Build the CLI from the v0.4.0 checkout with `swift build -c release --product agentdevctl`, then use `.build/release/agentdevctl` or put it on your path. Tools and app must come from the same release: v0.3 speaks `agentdevkit/2`.
+Build the tools from the v0.7.0 checkout with `swift build -c release --product agentdevctl --product agentdevkit-desktop`, then use `.build/release/agentdevctl` or put it on your path. Tools and app must come from the same release line: v0.3 and later speak `agentdevkit/2`, and newer tools feature-detect through `capabilities.features`.
 
-A Testing app must be running with its bridge explicitly enabled. AgentLab uses `--enable-agentdevkit`. To permit fixture, route and save commands, also pass `--allow-agentdevkit-mutations`.
-
-```sh
-agentdevctl session list --json
-agentdevctl --session SESSION_ID session ping --json
-agentdevctl --session SESSION_ID capabilities --json
-
-agentdevctl --session SESSION_ID scenario prepare \
-  --fixture large-project-v1 --route projects.editor.inspector \
-  --context '{"nodeId":"node-42"}' --json
-agentdevctl --session SESSION_ID state --json
-agentdevctl --session SESSION_ID wait --condition screen.ready --timeout-ms 1500 --json
-agentdevctl --session SESSION_ID observe --since REVISION --limit 20 --json
-agentdevctl --session SESSION_ID events since --revision REVISION --limit 20 --json
-agentdevctl --session SESSION_ID diagnostics recent --severity error --limit 10 --json
-agentdevctl --session SESSION_ID actions list --json
-agentdevctl --session SESSION_ID action invoke --id inspector.save \
-  --args '{"name":"Verified test edit"}' --revision REVISION --json
-```
-
-- **Names.** AgentLab's routes and fixtures are examples. Read the target app's capabilities for:
-  - route `contextSchema`;
-  - wait `conditions`;
-  - `diagnosticCategories`;
-  - effective `limits`, including `maxTimeoutMs`.
-- **Session selection.** `--session` takes a UUID, or a bundle ID that matches exactly one session.
-- **Scope.** `state`, `observe` and `wait` default to `--scope current-screen`.
-- **Timeouts.** Every command accepts `--timeout-ms`.
-- **Exit codes:**
-
-  | Code | Meaning |
-  | --- | --- |
-  | 2 | Invalid input |
-  | 3 | Session or connection |
-  | 4 | App failure |
-  | 5 | Timeout |
-  | 6 | Version or identity mismatch |
-
-- **Setup alone.** Use `fixtures load --fixture ID` or `navigation open --route ID`.
-- **Waiting on started work.** Pass `--no-wait` to get an accepted transition, then use its operation ID with `wait --condition operation.completed --operation UUID`.
-- **Finished spans.** `wait --condition lifecycle.ended --operation UUID` returns a retained span outcome even after you have navigated elsewhere.
-- **Checking without failing.** Add `--no-fail-on-timeout` to receive `satisfied: false` and the open `blockers` instead of a TIMEOUT error.
-- **Other conditions.** Pass arguments with `--args JSON`, or with `--field KEY --value JSON`.
-- **Long waits.** `wait --timeout-ms` accepts up to 120000. A wait longer than the session's `limits.maxTimeoutMs` runs as consecutive requests, and returns as soon as the condition holds. MCP `agentdevkit_wait` behaves the same way.
-- **Fixture arguments.** `fixtures load` and `scenario prepare` take `--fixture-args JSON` matching `capabilities.fixtureArguments[fixture]`, for example a test server's base URL.
-
-Use `observe` when you need both state and changes:
-
-- A response with `resynced: true` supplies a fresh baseline.
-- When paging, continue from the delta's `nextRevision`. If `hasMore` is true, keep reading before claiming you observed every retained change.
-- `action invoke --revision` fails with `STALE_REVISION` when app state moved. Read fresh state before retrying.
-- A repeated request ID returns the original response and does not run the command again.
-
-For scripted checks, drive the CLI from Python and parse one JSON envelope per call. Shell variables that hold a whole command are not split into words in zsh:
-
-```python
-import json, subprocess
-def run(*args):
-    out = subprocess.run(["agentdevctl", "--session", "BUNDLE_ID", *args, "--json"], capture_output=True, text=True)
-    return json.loads(out.stdout)   # check out.returncode against the documented exit codes
-```
-
-For a sandboxed app that publishes in its own container, select it by bundle ID with `--session BUNDLE_ID`, or put `--container BUNDLE_ID` before the command. `session list` does not scan containers. For App Group or paired loopback sessions, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
-
-## UI inspection
-
-When capabilities list `ui`, look at the real window before and after a change:
+## Start the app
 
 ```sh
-agentdevctl --session BUNDLE_ID ui capture --out window.png [--max-dimension 1600] [--format jpeg]
-agentdevctl --session BUNDLE_ID ui tree --only-identified            # roles, identifiers, labels, frames
-agentdevctl --session BUNDLE_ID ui tree --prefix button. --source appkit
-agentdevctl --session BUNDLE_ID ui press --id button.send            # mutation sessions only
-agentdevctl --session BUNDLE_ID operations list                      # open spans, age, progress
+agentdevctl launch PATH/App-Testing.app --mutations --replace --wait screen.ready      # or --build SCHEME [--project P]
+agentdevctl doctor PATH/App-Testing.app --expect-id main.toolbar                      # which startup stage failed
 ```
 
-- `ui tree --source accessibility` (default) is the system accessibility tree. `appkit` walks AppKit accessibility objects, and `views` lists the view hierarchy with class names, for diagnosing layout and captures.
-- Frames are `[x, y, width, height]` in window points from the top-left corner.
-- A press runs the control's real action, but it does not prove hit testing or focus. Use XCUITest for that.
-- Captures approximate glass: refraction and blur are not reproduced, and SwiftUI glass shapes draw without their fill. Check controls you cannot see with `ui tree`.
+`launch` passes `--enable-agentdevkit` (plus `--allow-agentdevkit-mutations` with `--mutations`), `--agentdevkit-fixture ID`, `--agentdevkit-profile UUID`, `--language en` (`-AppleLanguages`/`-AppleLocale`) and repeatable `--arg`. It returns `{sessionId, pid, bundleId, buildFingerprint, profile}`. `--replace` quits a running instance first; `--background` does not activate the app. `doctor` checks, in order: bundle and signature, process, opt-in flags, published session, authentication, a visible window, and an expected element. It stops at the first failure with a remedy.
+
+## Select the session once
+
+`--session` takes a UUID or a bundle ID that matches one session. Without it, the tools use `$AGENTDEVKIT_SESSION`, then the nearest `.agentdevkit.json` (`{"session": "com.example.app.testing"}`). `session list` marks the default. `--session=ID` works too, and so does a variable holding `--session ID`, even in zsh.
+
+```sh
+export AGENTDEVKIT_SESSION=com.example.app.testing
+agentdevctl capabilities --json          # routes, fixtures, scopes, actions, conditions, invariants, experiments, features, limits
+```
+
+## Set up, read and wait
+
+```sh
+agentdevctl scenario prepare --fixture large-project-v1 --route projects.editor.inspector --context '{"nodeId":"node-42"}'
+agentdevctl state --field phase                     # raw value; exit 4 when absent; dotted paths reach nested values
+agentdevctl state --fields phase,queueCount         # one JSON object keyed by path
+agentdevctl wait --until 'phase=results'            # state.field_equals; VALUE is JSON or bare text
+agentdevctl wait --until screen.ready               # any condition name; camelCase spellings resolve
+agentdevctl wait --operation UUID                   # operation.completed
+agentdevctl observe --since REVISION                # state, events and invariant violations since REVISION
+```
+
+- Errors for unknown conditions, routes, fixtures, actions, scopes and experiments list `validNames`, the `closest` name and a runnable `example`. The CLI prints "Did you mean …?" and the example.
+- A parse error prints only that command's usage. `agentdevctl help COMMAND` lists its options.
+- `wait --timeout-ms` accepts up to 120000 and splits into requests within `limits.maxTimeoutMs`. `--every-ms` sets the request length. `--no-fail-on-timeout` returns `satisfied: false` with blockers.
+- **Exit codes:** 2 invalid input · 3 session or connection · 4 app failure or failed check · 5 timeout · 6 version or identity mismatch.
+
+## Long-running and UI-presenting work
+
+`fixtures load`, `scenario prepare` and `action invoke` answer `accepted` with an `operationId` when the work outlasts the request deadline. Actions that open panels (`presentsUI` in `actions list`) always do. Add `--wait` to follow the operation to its final result.
+
+```sh
+agentdevctl fixtures load --fixture real-scan-v1 --wait
+agentdevctl operations list                              # open spans; awaitingUser while a panel or sheet waits
+agentdevctl operations status --operation UUID           # pending | completed (revision, result) | failed (code, reason) | cancelled | unknown
+agentdevctl ui dismiss [--item ok]                       # close the front sheet, panel, alert or popover
+```
+
+While tracked work runs, other mutations get a retryable `CONFLICT` naming its operation. If a connection drops during a mutation, the tools ask `operations.status` with the same request ID and report "applied at revision N", "still running", or "not applied, safe to retry".
+
+## Look at and drive the UI
+
+```sh
+agentdevctl ui surfaces                                  # windows, sheets, popovers, panels, alerts, open menus
+agentdevctl ui capture --out ui.png                      # main window plus every sheet, popover and alert above it
+agentdevctl ui capture --mode window | --surface ID      # one window, or one surface
+agentdevctl ui snapshot --out ui.png --json              # image, tree and revision from one main-actor turn
+agentdevctl ui tree --lint                               # values, min/max/step, actions, paths, identifier problems
+agentdevctl ui press --path 'cleanupQueue/queueRow[3]/checkbox' | --role checkbox --label Downloads
+agentdevctl ui set --id map.detail --value 2             # slider, stepper, checkbox (true/false) or text
+agentdevctl ui choose --id density --item Detailed       # pop-up or SwiftUI Menu, without leaving it open
+agentdevctl ui expand --role disclosuretriangle --label Advanced
+agentdevctl ui key --keys "Down Down Return"             # in-process key events to the key window
+agentdevctl ui hover --id row.downloads                  # synthesized pointer: hover cards, tooltips
+agentdevctl ui scroll --id list --dy 400
+```
+
+- `ui press --id` fails with `AMBIGUOUS_ELEMENT` and lists paths when several elements share an identifier. `ui tree --lint` shows identifiers SwiftUI copied from a container onto its children, and the `.accessibilityElement(children: .contain)` fix.
+- Locators search the main window and the surfaces above it; pass `--window ID` from `ui surfaces` to target one.
+- `--revision N` on `ui capture` and `ui tree` fails with `STALE_REVISION` if state moved.
+- Captures report `approximations`: `glassEffect` (Liquid Glass approximated), `popoverChrome`, and `remoteContent` for open and save panels, whose content another process draws and which a capture cannot show.
+- Evidence labels: `ui press`, `ui perform` → `accessibility` (control exists, is enabled, responds); `ui key/hover/scroll` → `in-process` (the app's handlers ran); `agentdevctl desktop …` → `desktop` (real system events). None replaces XCUITest for hit testing.
+
+## Regression evidence
+
+```sh
+agentdevctl recipe run recipes/queue-map.json [--repeat 10]      # setup, steps, bursts, waits, assertions; exit 4 on failure
+agentdevctl recipe record start --file draft.json  …  agentdevctl recipe record stop
+agentdevctl invariants [--watch]                                # app invariants: holds, violations with revisions, cost
+agentdevctl ui capture --baseline 'shots/main-{locale}-{appearance}.png' [--threshold 0.01] [--update-baseline]
+agentdevctl audit-release PATH/App.app [--forbid AgentDevKit,TestingSession]   # shipping build: no symbols, no session
+```
+
+A recipe failure reports the round, step, expected and observed values, revision, and a folder with `capture.png`, `tree.json` and `state.json`. Recipe steps: `action`, `perform`, `press`, `key`, `hover`, `scroll`, `wait`, `assert` (`field` with `equals`, `contains`, `greaterThan` …; `element`; `invariants`), `burst` (sent back to back), `ask`, `capture` (`baseline`), `navigate`, `fixture`, `sleep`, `note`. Top-level `invariants: "hold"` fails a round that violated one.
+
+## People, probes and permissions
+
+```sh
+agentdevctl operator ask --question "Did a dialog appear?" --options Yes,No --wait   # a person answers in a labelled Testing panel
+agentdevctl experiment run --id probe.stat --args '{"path":"Downloads"}'            # recorded under diagnostics category experiment
+agentdevctl tcc status                                     # what the app observes: Full Disk Access probe, Accessibility, Screen Recording
+agentdevctl tcc reset --bundle com.example.app.testing --service MediaLibrary       # Testing bundles only; prints what it cannot reset
+agentdevctl desktop check | click --id X | drag --from-id A --to-id B | key --keys "Tab Tab"   # needs the runner's Accessibility grant
+```
+
+`tccutil` at user level cannot reset Full Disk Access, Accessibility, Screen Recording or Input Monitoring; the person removes those in System Settings → Privacy & Security.
 
 ## Scaffold
 
@@ -89,19 +103,6 @@ agentdevctl --session BUNDLE_ID operations list                      # open span
 
 ## MCP
 
-Build with `swift build --package-path Tools/MCP --force-resolved-versions -c release`. This needs Swift 6.2 or later. Add `--show-bin-path` to find the executable directory. Register the absolute path of `agentdevkit-mcp` as a stdio server in the client the user already uses. For example, Claude Code:
+Build with `swift build --package-path Tools/MCP --force-resolved-versions -c release` (Swift 6.2 or later) and register the absolute path of `agentdevkit-mcp` as a stdio server, for example `claude mcp add agentdevkit -- /absolute/path/to/agentdevkit-mcp`. Set `AGENTDEVKIT_SESSION` in the server environment to skip `sessionId`; `AGENTDEVKIT_CONTAINER`, `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` select another location. Stdout carries only MCP frames.
 
-```sh
-claude mcp add agentdevkit -- /absolute/path/to/agentdevkit-mcp
-```
-
-For a container session, pass the bundle ID as `sessionId` or set `AGENTDEVKIT_CONTAINER`. For App Group or loopback sessions, set `AGENTDEVKIT_APP_GROUP` or `AGENTDEVKIT_PAIRING_DIR` in the server environment. Stdout carries only MCP frames.
-
-Call `agentdevkit_session` first, then pass a `sessionId` (UUID or unique bundle ID) to the other tools as needed:
-
-- `agentdevkit_capabilities`, `agentdevkit_prepare`, `agentdevkit_fixtures`, `agentdevkit_navigate`
-- `agentdevkit_state`, `agentdevkit_observe`, `agentdevkit_wait`, `agentdevkit_events`
-- `agentdevkit_diagnostics`, `agentdevkit_actions`, `agentdevkit_invoke`, `agentdevkit_operations`
-- `agentdevkit_capture` (returns image content, so the model sees the window), `agentdevkit_ui_tree`, `agentdevkit_press`
-
-Every tool accepts `timeoutMs`. The app answers `TIMEOUT` with its blockers and hints at that deadline; the client keeps reading for up to one more second so that answer survives a loaded machine. Tool errors carry the bridge error code in structured output. The CLI and the MCP tools are generated from one operation table, so their fields and defaults match.
+Every CLI operation is one tool, `agentdevkit_<name>`, generated from the same table (`agentdevctl --tools-markdown` prints it): `session`, `capabilities`, `prepare`, `fixtures`, `navigate`, `state` (`fields`), `observe`, `wait` (`until`, `everyMs`), `events`, `diagnostics`, `operations`, `operation_status`, `actions`, `invoke` (`wait`), `capture` and `ui_snapshot` (image content), `ui_surfaces`, `ui_tree`, `press`, `ui_perform`, `ui_key`, `ui_hover`, `ui_scroll`, `invariants`, `operator_ask`, `operator_answer`, `experiment`, `privacy_status`. Every tool accepts `sessionId` and `timeoutMs`. Tool errors carry the bridge error code and its `details`.

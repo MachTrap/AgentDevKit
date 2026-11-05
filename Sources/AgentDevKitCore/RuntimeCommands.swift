@@ -25,6 +25,8 @@ public struct StateObservation: Codable, Sendable {
     public let screen: ScreenState
     public let delta: EventPage?
     public let resynced: Bool
+    /// Invariant violations recorded after `sinceRevision`, oldest first. Absent when none or before v0.6.
+    public var violations: [InvariantViolation]?
 
     /// The caller supplies state captured on the actor that owns the journal.
     public init(screen: ScreenState, journal: RevisionJournal, request: ObserveRequest) throws {
@@ -73,12 +75,16 @@ public struct WaitState: Codable, Sendable {
     public let blockers: [String]
     public let screen: ScreenState
     public let lifecycle: LifecycleEvent?
+    /// The canonical condition ID that was evaluated, such as `state.field_equals` for `state.fieldEquals`. Absent before v0.6.
+    public let condition: String?
 
-    public init(satisfied: Bool = true, blockers: [String] = [], screen: ScreenState, lifecycle: LifecycleEvent? = nil) {
+    public init(satisfied: Bool = true, blockers: [String] = [], screen: ScreenState, lifecycle: LifecycleEvent? = nil,
+                condition: String? = nil) {
         self.satisfied = satisfied
         self.blockers = blockers
         self.screen = screen
         self.lifecycle = lifecycle
+        self.condition = condition
     }
 }
 
@@ -227,16 +233,19 @@ public struct ActionCapability: Codable, Sendable, Equatable {
     public let enabled: Bool
     public let inputSchema: [String: JSONValue]
     public let interaction: String
+    /// The action opens a panel, sheet or alert. It always answers `accepted` with an operation ID.
+    public let presentsUI: Bool?
 
-    public init(id: String, scope: String, enabled: Bool, inputSchema: [String: JSONValue]) {
+    public init(id: String, scope: String, enabled: Bool, inputSchema: [String: JSONValue], presentsUI: Bool = false) {
         self.id = id
         self.scope = scope
         self.enabled = enabled
         self.inputSchema = inputSchema
         self.interaction = "semantic"
+        self.presentsUI = presentsUI ? true : nil
     }
 
-    private enum CodingKeys: String, CodingKey { case id, scope, enabled, inputSchema, interaction }
+    private enum CodingKeys: String, CodingKey { case id, scope, enabled, inputSchema, interaction, presentsUI }
 }
 
 public struct ActionResult: Codable, Sendable {
@@ -285,6 +294,75 @@ public struct OpenSpan: Sendable, Hashable {
 public enum OperationCommands {
     /// Lists open screen, work and scenario spans with their age and reported progress.
     public static let list = Command<EmptyParameters, [OperationInfo]>("operations.list")
+    /// Reports whether a mutating request or tracked operation applied, by request ID or operation ID.
+    /// Read-only and safe after CONNECTION_LOST: it tells a caller whether a retry is safe.
+    public static let status = Command<OperationStatusRequest, OperationStatus>("operations.status")
+}
+
+public struct OperationStatusRequest: Codable, Sendable {
+    public let requestId: UUID?
+    public let operationId: UUID?
+
+    public init(requestId: UUID? = nil, operationId: UUID? = nil) {
+        self.requestId = requestId
+        self.operationId = operationId
+    }
+}
+
+/// What the host knows about one mutating request or tracked operation.
+public struct OperationStatus: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable {
+        /// Still running, or accepted and not yet finished.
+        case pending
+        case completed
+        case failed
+        case cancelled
+        /// The host has no record: never received, or older than the retention window. A retry is safe
+        /// only when the caller knows the request never reached this session.
+        case unknown
+    }
+
+    public let state: State
+    public let requestId: UUID?
+    public let operationId: UUID?
+    public let method: String?
+    /// The journal revision after the request or operation finished.
+    public let revision: UInt64?
+    /// The failure code, such as `TIMEOUT`, when `state` is `failed`.
+    public let code: String?
+    public let reason: String?
+    /// The request's final result, when it finished and was small enough to retain.
+    public let result: JSONValue?
+    /// A modal panel, sheet or alert is up while this operation is pending.
+    public let awaitingUser: Bool?
+    /// The failure's details, such as `blockers` and `hint` for a screen that never became ready.
+    public let details: [String: JSONValue]?
+
+    public init(state: State, requestId: UUID? = nil, operationId: UUID? = nil, method: String? = nil, revision: UInt64? = nil,
+                code: String? = nil, reason: String? = nil, result: JSONValue? = nil, awaitingUser: Bool? = nil,
+                details: [String: JSONValue]? = nil) {
+        self.details = details
+        self.state = state
+        self.requestId = requestId
+        self.operationId = operationId
+        self.method = method
+        self.revision = revision
+        self.code = code
+        self.reason = reason
+        self.result = result
+        self.awaitingUser = awaitingUser
+    }
+
+    /// A one-line answer to "did it apply?".
+    public var summary: String {
+        switch state {
+        case .completed: "applied at revision \(revision.map(String.init) ?? "?")"
+        case .pending: awaitingUser == true ? "still running, waiting for the person to answer a panel" : "still running"
+        case .failed: "not applied: \(code ?? "failed")\(reason.map { " (\($0))" } ?? "")"
+        case .cancelled: "cancelled, not applied"
+        case .unknown: "not applied, safe to retry"
+        }
+    }
 }
 
 /// An open span as `operations.list` reports it.
@@ -299,9 +377,12 @@ public struct OperationInfo: Codable, Sendable, Equatable {
     /// Units done, when the app reports progress.
     public let completed: Int?
     public let total: Int?
+    /// A modal panel, sheet or alert is up while this operation runs. Only reported for operations that present UI.
+    public let awaitingUser: Bool?
 
     public init(id: UUID, kind: LifecycleEvent.Kind, name: String, scope: String, parentId: UUID?, correlationId: UUID?,
-                ageMs: Int, completed: Int?, total: Int?) {
+                ageMs: Int, completed: Int?, total: Int?, awaitingUser: Bool? = nil) {
+        self.awaitingUser = awaitingUser
         self.id = id
         self.kind = kind
         self.name = name

@@ -22,6 +22,14 @@ public actor AgentHost {
     private var requestsInBucket = 0
     private var rejectedInBucket = 0
     private var mutationInProgress = false
+    /// The tracked request still holding the mutation slot after it answered `accepted`.
+    private var trackedMutation: UUID?
+    private let ledger: RequestLedger
+    /// Keeps App Nap from coalescing the app's timers while a session runs, so deadlines hold for background apps.
+    private var activity: (any NSObjectProtocol)?
+    /// Main-actor setup run at start, such as installing invariants into the runtime.
+    private let installers: [@MainActor @Sendable () -> Void]
+    private let features: [String]
     public private(set) var state: AgentHostState = .stopped
     private var stateObservers: [UUID: AsyncStream<AgentHostState>.Continuation] = [:]
 
@@ -40,25 +48,33 @@ public actor AgentHost {
     ) {
         let visible = catalog.visible(allowMutations: allowMutations)
         let limits = configuration.limits.clamped
+        let ledger = RequestLedger()
         // Built from the full catalog so a read-only session answers mutating methods with PERMISSION_DENIED.
-        let builtins = Builtins.commands(adapter: adapter, runtime: runtime, catalog: catalog, allowMutations: allowMutations,
-                                         waitMargin: .milliseconds(limits.waitMarginMs))
+        let built = Builtins.commands(adapter: adapter, runtime: runtime, catalog: catalog, allowMutations: allowMutations,
+                                      waitMargin: .milliseconds(limits.waitMarginMs), ledger: ledger)
+        let builtins = built.commands
             + UIInspection.commands(adapter: adapter, runtime: runtime, access: catalog.ui, maxResponseBytes: limits.maxResponseBytes)
         self.init(visible: visible, commands: builtins + catalog.commands, allowMutations: allowMutations,
-                  configuration: configuration, conditions: Builtins.builtinConditions)
+                  configuration: configuration, conditions: Builtins.builtinConditions(catalog), ledger: ledger,
+                  installers: [built.install], features: Builtins.features(catalog, allowMutations: allowMutations))
     }
 
     /// Serves only `system.*` and the catalog's typed commands. Use this when app state is not on the main actor.
     public init(catalog: AgentCatalog = AgentCatalog(scopes: []), allowMutations: Bool = false,
                 configuration: AgentHostConfiguration = AgentHostConfiguration()) {
         self.init(visible: catalog.visible(allowMutations: allowMutations), commands: catalog.commands,
-                  allowMutations: allowMutations, configuration: configuration, conditions: [])
+                  allowMutations: allowMutations, configuration: configuration, conditions: [], ledger: RequestLedger(),
+                  installers: [], features: [])
     }
 
     /// Registers every command, so a read-only session can answer a mutating method with PERMISSION_DENIED.
     /// Capabilities list only the commands the session may run.
     private init(visible: AgentCatalog, commands: [AppCommand], allowMutations: Bool,
-                 configuration: AgentHostConfiguration, conditions: [Capabilities.ConditionCapability]) {
+                 configuration: AgentHostConfiguration, conditions: [Capabilities.ConditionCapability],
+                 ledger: RequestLedger, installers: [@MainActor @Sendable () -> Void], features: [String]) {
+        self.ledger = ledger
+        self.installers = installers
+        self.features = features
         var registry: [String: AppCommand] = [:]
         for command in commands {
             precondition(!command.method.hasPrefix("system.") && registry[command.method] == nil,
@@ -103,8 +119,10 @@ public actor AgentHost {
     }
 
     private var listenerLimits: ListenerLimits {
+        // A reply due just before the request deadline still needs time to be written, so the connection
+        // outlives the longest deadline by the same grace the client allows (AgentClient.responseGraceMs).
         ListenerLimits(connections: limits.maxConnections, maxRequestBytes: limits.maxRequestBytes,
-                       readTimeoutMs: limits.requestReadTimeoutMs, connectionTimeoutMs: limits.maxTimeoutMs)
+                       readTimeoutMs: limits.requestReadTimeoutMs, connectionTimeoutMs: limits.maxTimeoutMs + 1_000)
     }
 
     // MARK: Start and stop
@@ -129,6 +147,7 @@ public actor AgentHost {
             for waiter in startupStops { waiter.resume() }
             startupStops.removeAll()
         }
+        for install in installers { await MainActor.run { install() } }
         do {
             switch location {
             case .local, .appGroup, .appContainer:
@@ -142,7 +161,11 @@ public actor AgentHost {
             setState(.failed(failure))
             throw failure
         }
-        if let active { setState(.running(active.identity)) }
+        if let active {
+            activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                             reason: "AgentDevKit Testing session")
+            setState(.running(active.identity))
+        }
     }
 
     private func startLoopback(folder: URL, makeIdentity: @Sendable () throws -> SecIdentity) async throws {
@@ -277,6 +300,9 @@ public actor AgentHost {
         }
         directory = nil
         replay.removeAll()
+        ledger.removeAll()
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
         requestsInBucket = 0
         rejectedInBucket = 0
         setState(.stopped)
@@ -390,10 +416,32 @@ public actor AgentHost {
         if let command {
             guard command.mutating else { return try bounded(await command.run(params, context)) }
             guard allowMutations else { throw Failure(.permissionDenied, "Session is read-only.") }
-            guard !mutationInProgress else { throw Failure(.conflict, "Another mutation is in progress.", retryable: true) }
+            guard !mutationInProgress else {
+                throw Failure(.conflict, "Another mutation is in progress.", retryable: true,
+                              details: trackedMutation.map { ["operationId": .string($0.uuidString)] })
+            }
             mutationInProgress = true
-            defer { mutationInProgress = false }
-            return try bounded(await command.run(params, context))
+            ledger.begin(context.requestId, method: command.method)
+            var holdsSlot = false
+            defer { if !holdsSlot { mutationInProgress = false } }
+            do {
+                let response: Data
+                if let promote = command.promote {
+                    guard let tracked = try await runTracked(command, promote: promote, params: params, context: context) else {
+                        // The reply is `accepted`; the work keeps the mutation slot until it finishes.
+                        holdsSlot = true
+                        return try bounded(try await promote(params, context))
+                    }
+                    response = try bounded(tracked)
+                } else {
+                    response = try bounded(await command.run(params, context))
+                }
+                ledger.finish(context.requestId, response: response)
+                return response
+            } catch {
+                ledger.fail(context.requestId, mapError(error))
+                throw error
+            }
         }
         guard params.isEmpty else {
             throw Failure(.invalidParams, "Expected empty params.", details: ["field": .string("params." + (params.keys.sorted().first ?? ""))])
@@ -405,14 +453,61 @@ public actor AgentHost {
             app: identity, methods: methods.sorted(), readOnly: !available.contains(where: \.mutating),
             routes: catalog.routes.map(\.capability), fixtures: catalog.fixtures, scopes: catalog.scopes,
             actions: catalog.actions.map(\.id), conditions: conditions, lifecycle: catalog.lifecycle,
-            diagnosticCategories: catalog.diagnosticCategories,
+            diagnosticCategories: catalog.allDiagnosticCategories,
             fixtureArguments: catalog.fixtureArguments.mapValues(\.json),
             ui: catalog.ui.names,
             limits: .init(maxResponseBytes: limits.maxResponseBytes, maxRequestBytes: limits.maxRequestBytes,
                           maxTimeoutMs: limits.maxTimeoutMs, maxConcurrentConnections: limits.maxConnections,
-                          requestsPerSecond: limits.requestsPerSecond)
+                          requestsPerSecond: limits.requestsPerSecond),
+            features: features.filter { feature in
+                // A feature backed by a method is advertised only when this session serves that method.
+                !feature.contains(".") || commands[feature].map { allowMutations || !$0.mutating } ?? true
+            },
+            invariants: catalog.invariants.map(\.id),
+            experiments: catalog.experiments.map(\.capability)
         )
         return try bounded(context.encode(capabilities))
+    }
+
+    /// Runs a tracked command with a deadline extended by `maxTrackedMs`. Returns its response when it finishes
+    /// before the request deadline, or nil after recording it as accepted; it then finishes in the background.
+    private func runTracked(
+        _ command: AppCommand, promote: @escaping @Sendable ([String: JSONValue], CommandContext) async throws -> Data,
+        params: [String: JSONValue], context: CommandContext
+    ) async throws -> Data? {
+        let extended = context.extending(to: context.deadline + .milliseconds(limits.maxTrackedMs))
+        let work = Task { try await command.run(params, extended) }
+        // Leave room for the main-actor hop that builds the accepted reply.
+        let replyBy = context.deadline - .milliseconds(max(limits.waitMarginMs, 300))
+        let finished: Result<Data, any Error>? = await withCheckedContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            Task { once.resume(await work.result) }
+            Task {
+                try? await ContinuousClock().sleep(until: replyBy)
+                once.resume(nil)
+            }
+        }
+        if let finished { return try finished.get() }
+        let requestId = context.requestId
+        ledger.accepted(requestId, operationId: requestId)
+        trackedMutation = requestId
+        Task { [weak self] in
+            let result = await work.result
+            await self?.finishTracked(requestId, result)
+        }
+        return nil
+    }
+
+    private func finishTracked(_ requestId: UUID, _ result: Result<Data, any Error>) {
+        if trackedMutation == requestId {
+            trackedMutation = nil
+            mutationInProgress = false
+        }
+        switch result {
+        case .success(let data) where data.count <= limits.maxResponseBytes: ledger.finish(requestId, response: data)
+        case .success: ledger.fail(requestId, Failure(.responseTooLarge, "The final result exceeds the frame limit."))
+        case .failure(let error): ledger.fail(requestId, mapError(error))
+        }
     }
 
     private func rejected(_ failure: Failure) throws -> Failure {

@@ -40,17 +40,21 @@ public struct AgentAction: Sendable {
     public let id: String
     public let scope: String
     public let input: ObjectSchema
+    /// The action opens a panel, sheet or alert that waits for a person. The host always runs it as a tracked
+    /// operation and answers `accepted` at once, never TIMEOUT. `operations.list` reports `awaitingUser`.
+    public let presentsUI: Bool
     let enabled: @MainActor @Sendable () -> Bool
     let run: @MainActor @Sendable ([String: JSONValue], CommandContext) async throws -> ActionOutcome
 
     public init<Input: Decodable>(
-        _ id: String, scope: String, input: ObjectSchema, as type: Input.Type,
+        _ id: String, scope: String, input: ObjectSchema, as type: Input.Type, presentsUI: Bool = false,
         enabled: @escaping @MainActor @Sendable () -> Bool = { true },
         run: @escaping @MainActor @Sendable (Input, CommandContext) async throws -> ActionOutcome
     ) {
         self.id = id
         self.scope = scope
         self.input = input
+        self.presentsUI = presentsUI
         self.enabled = enabled
         self.run = { arguments, context in
             let value: Input
@@ -86,6 +90,55 @@ public struct AgentCondition: Sendable {
     }
 }
 
+/// Result of one invariant evaluation.
+public enum InvariantResult: Sendable, Equatable {
+    case holds
+    /// Bounded, app-defined facts such as counts or IDs. Never user content or secrets.
+    case violated(details: [String: JSONValue])
+
+    public static var violated: InvariantResult { .violated(details: [:]) }
+}
+
+/// A property of app state that must hold after every change, such as "no queued item is still drawn on the map".
+/// The runtime evaluates it on the main actor after each recorded change, debounced to the next run-loop turn,
+/// and reports each transition to violated once, as a diagnostic with category `invariant`.
+public struct AgentInvariant: Sendable {
+    public let id: String
+    public let scope: String
+    /// Evaluations slower than this are flagged `overBudget`.
+    public let budgetMicros: Int
+    let evaluate: @MainActor @Sendable (ScreenState) throws -> InvariantResult
+
+    public init(_ id: String, scope: String = "current-screen", budgetMicros: Int = 2_000,
+                evaluate: @escaping @MainActor @Sendable (_ screen: ScreenState) throws -> InvariantResult) {
+        self.id = id
+        self.scope = scope
+        self.budgetMicros = max(1, budgetMicros)
+        self.evaluate = evaluate
+    }
+}
+
+/// An investigation probe, kept apart from product actions. Every run is recorded as a diagnostic with
+/// category `experiment`, its inputs and its results. Read-only probes run in read-only sessions too.
+public struct AgentExperiment: Sendable {
+    public let id: String
+    public let input: ObjectSchema
+    public let readOnly: Bool
+    let run: @MainActor @Sendable ([String: JSONValue], CommandContext) async throws -> [String: JSONValue]
+
+    public init(_ id: String, input: ObjectSchema = .empty, readOnly: Bool = true,
+                run: @escaping @MainActor @Sendable (_ arguments: [String: JSONValue], CommandContext) async throws -> [String: JSONValue]) {
+        self.id = id
+        self.input = input
+        self.readOnly = readOnly
+        self.run = run
+    }
+
+    var capability: Capabilities.ExperimentCapability {
+        .init(id: id, inputSchema: input.json, readOnly: readOnly)
+    }
+}
+
 /// Everything an app registers. The host derives both its method table and its
 /// capabilities from this value, so advertised and served features cannot drift.
 public struct AgentCatalog: Sendable {
@@ -103,13 +156,23 @@ public struct AgentCatalog: Sendable {
     /// In-process UI tools to serve. Capture and tree are reads of the app's own windows; press is a
     /// mutation. Captures show whatever the window shows, so enable them only for Testing builds.
     public var ui: UIAccess
+    /// Properties evaluated after every change. See `AgentInvariant`.
+    public var invariants: [AgentInvariant]
+    /// Investigation probes. See `AgentExperiment`.
+    public var experiments: [AgentExperiment]
+    /// Serve `operator.ask`: a Testing-only panel in which a person answers the agent's question. A mutation.
+    public var operatorPrompts: Bool
 
     public init(
         scopes: [String] = ["current-screen"], routes: [AgentRoute] = [], fixtures: [String] = [],
         fixtureArguments: [String: ObjectSchema] = [:], actions: [AgentAction] = [], conditions: [AgentCondition] = [], lifecycle: [LifecycleCapability] = [],
-        diagnosticCategories: [String] = [], commands: [AppCommand] = [], ui: UIAccess = []
+        diagnosticCategories: [String] = [], commands: [AppCommand] = [], ui: UIAccess = [],
+        invariants: [AgentInvariant] = [], experiments: [AgentExperiment] = [], operatorPrompts: Bool = false
     ) {
         self.ui = ui
+        self.invariants = invariants
+        self.experiments = experiments
+        self.operatorPrompts = operatorPrompts
         self.scopes = scopes
         self.routes = routes
         self.fixtures = fixtures
@@ -131,7 +194,19 @@ public struct AgentCatalog: Sendable {
         visible.actions = []
         visible.lifecycle = lifecycle.filter { $0.kind != .scenario }
         visible.commands = commands.filter { !$0.mutating }
-        visible.ui.remove(.press)
+        visible.ui.subtract(.mutating)
+        visible.experiments = experiments.filter(\.readOnly)
+        visible.operatorPrompts = false
         return visible
+    }
+
+    /// App categories plus the built-in ones this catalog's features record.
+    var allDiagnosticCategories: [String] {
+        var categories = diagnosticCategories
+        for (enabled, name) in [(!invariants.isEmpty, "invariant"), (!experiments.isEmpty, "experiment"), (operatorPrompts, "operator")]
+        where enabled && !categories.contains(name) {
+            categories.append(name)
+        }
+        return categories
     }
 }

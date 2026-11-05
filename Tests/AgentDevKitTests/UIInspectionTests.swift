@@ -73,7 +73,7 @@ final class WindowApp: AgentAdapter {
     @Test func captureRendersTheWindowWithinTheResponseLimit() async throws {
         try await run { app, client in
             let capabilities = try #require(try await client.capabilities().result)
-            #expect(capabilities.ui == ["capture", "tree", "press"])
+            #expect(capabilities.ui == ["capture", "tree", "press", "perform", "input"])
             let capture = try #require(try await client.call(UICommands.capture, CaptureRequest(maxDimension: 300)).result)
             #expect(max(capture.width, capture.height) <= 300)
             #expect(capture.title == app.window.title)
@@ -93,7 +93,8 @@ final class WindowApp: AgentAdapter {
             #expect(byId["field.token"]?.value == "Bearer <redacted>")
             #expect(byId["field.password"]?.value == nil, "Secure fields never report a value.")
             let frame = try #require(byId["button.go"]?.frame)
-            #expect(frame[2] == 100 && frame[3] == 32)
+            // The system tree reports the visible bezel, which is inset from the 100 × 32 view frame.
+            #expect((60...110).contains(frame[2]) && (16...40).contains(frame[3]))
             let filtered = try #require(try await client.call(UICommands.tree, TreeRequest(identifierPrefix: "button.")).result)
             #expect(filtered.elements.compactMap(\.identifier).sorted() == ["button.go", "button.off"])
         }

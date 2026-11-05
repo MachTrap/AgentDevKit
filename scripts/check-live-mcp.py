@@ -46,7 +46,14 @@ with subprocess.Popen(
         assert hello["serverInfo"]["version"] == version
         send("notifications/initialized")
         catalog = {tool["name"]: tool for tool in send("tools/list", request_id=2)["tools"]}
-        assert len(catalog) == 16
+        # session, capabilities and one tool per shared operation.
+        assert len(catalog) == 28, sorted(catalog)
+        for name in ["ui_perform", "ui_key", "ui_hover", "ui_scroll", "operator_ask"]:
+            assert catalog["agentdevkit_" + name]["annotations"]["destructiveHint"] is True, name
+        for name in ["operation_status", "ui_surfaces", "ui_snapshot", "invariants", "privacy_status"]:
+            assert catalog["agentdevkit_" + name]["annotations"]["readOnlyHint"] is True, name
+        assert catalog["agentdevkit_state"]["inputSchema"]["properties"]["fields"]["type"] == "array"
+        assert "until" in catalog["agentdevkit_wait"]["inputSchema"]["properties"]
         assert catalog["agentdevkit_press"]["annotations"]["destructiveHint"] is True
         assert catalog["agentdevkit_capture"]["annotations"]["readOnlyHint"] is True
         assert catalog["agentdevkit_prepare"]["annotations"]["destructiveHint"] is True
@@ -78,6 +85,10 @@ with subprocess.Popen(
         rejected = tool("state", 5, scope="not-registered")
         assert rejected["isError"] is True
         assert rejected["structuredContent"]["error"]["code"] == "INVALID_PARAMS"
+        assert "current-screen" in rejected["structuredContent"]["error"]["details"]["validNames"]
+        projected = tool("state", 50, fields=["nodeId", "missing.field"])["structuredContent"]
+        assert projected["result"] == {"nodeId": "node-42"} and projected["missingFields"] == ["missing.field"]
+        assert tool("wait", 51, until="nodeId=node-42")["structuredContent"]["result"]["condition"] == "state.field_equals"
 
         observation = tool("observe", 6, scope="current-screen", sinceRevision=screen["revision"])["structuredContent"]["result"]
         assert observation["screen"] == screen and observation["delta"]["events"] == []

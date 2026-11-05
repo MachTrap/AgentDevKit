@@ -6,7 +6,7 @@ Start with `agentdevctl scaffold --app NAME --bundle-id ID`. It writes `NAMETest
 
 1. Find the Xcode target, composition root, router, data store and existing tests. Pick one screen and the real service or coordinator that already owns it.
 2. Add a Testing app target with its own bundle ID and store.
-   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.5.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0).
+   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.7.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.7.0).
    - Keep the bridge source and package products out of the normal Debug and Release targets.
    - Preserve the shipping app's entitlements.
 3. Start the bridge from a Testing-only composition root:
@@ -87,13 +87,14 @@ Read-only sessions hide routes, fixtures, actions and scenario lifecycle entries
 
 ## UI inspection
 
-Set `AgentCatalog(ui: .all)` to let agents look at the app's own windows, with no Screen Recording or Accessibility permission:
+Set `AgentCatalog(ui: .all)` to let agents look at and drive the app's own windows, with no Screen Recording or Accessibility permission. Pick a subset with `[.capture, .tree]` (reads), `.press`, `.perform` (typed operations) and `.input` (synthesized keys, hover, scroll); the last three are mutations that read-only sessions never serve.
 
-- `ui.capture` renders a window to PNG or JPEG. It draws Liquid Glass sidebars and list rows, and composites sheets over their parent. SwiftUI glass shapes (`.glassEffect`, glass button styles) draw without their glass fill.
-- `ui.tree` returns the system accessibility tree, as VoiceOver and XCUITest see it, with secrets redacted and secure fields' values omitted.
-- `ui.press` performs the accessibility press on an identified element. It is a mutation, so read-only sessions never serve it.
+- `ui.capture` composites the main window and every sheet, popover and alert above it. Liquid Glass and popover chrome are approximated and reported in `approximations`; open and save panels draw in another process (`remoteContent`).
+- `ui.surfaces` lists windows, sheets, popovers, panels, alerts and open menus.
+- `ui.tree` returns the system accessibility tree, as VoiceOver and XCUITest see it, with secrets redacted, secure fields' values omitted, numeric values, actions and stable paths.
+- `ui.press` and `ui.perform` locate elements by identifier, path or role and label.
 
-Captures show whatever the window shows, so enable them only in the Testing target, and keep secrets out of visible text where you can. Override `window(for:)` when the app has several windows.
+Captures show whatever the window shows, so enable them only in the Testing target, and keep secrets out of visible text where you can. The default window is the main document window, never an alert or panel while one is visible. Override `window(for:)` when the app has several document windows.
 
 In SwiftUI, `.accessibilityIdentifier` on a container copies the identifier onto every child and replaces the children's own identifiers. Give containers `.accessibilityElement(children: .contain)` before their identifier, as in:
 
@@ -107,6 +108,17 @@ VStack { … }.accessibilityElement(children: .contain).accessibilityIdentifier(
 
 For long work with countable steps, call `runtime.progress(id:completed:total:)` on its open span. Agents read open spans, their age and progress with `operations.list`.
 
+`fixtures.load`, `scenario.prepare` and `actions.invoke` are tracked: when the work outlasts the request deadline, the host answers `accepted` with the request ID as operation ID and keeps the mutation slot until it finishes, up to `Limits.maxTrackedMs` (30 s). An action can also return `runtime.track("scan.run", scope: "app") { try await scanner.run() }`, which runs the body as a runtime-owned `work` span and returns `.accepted(operationId:)` at once.
+
+Mark actions that open a panel, sheet or alert with `presentsUI: true`. The host runs them as tracked operations, answers `accepted` immediately, and `operations.list` reports `awaitingUser` while the panel is up:
+
+```swift
+AgentAction("library.import", scope: "library", input: .empty, as: Empty.self, presentsUI: true) { [model] _, _ in
+    guard await model.chooseImportFolder() else { throw Failure(.cancelled, "The person cancelled the panel.") }
+    return .completed
+}
+```
+
 ## Lifecycle events
 
 For each feature, agree on these during implementation: route and context, readiness, accessibility IDs, scoped state, and finite work names.
@@ -118,6 +130,21 @@ Record boundaries on the `AgentRuntime`, on the main actor with the state they d
 - **Errors:** use `runtime.withLifecycle` for scoped work that throws.
 
 Use static names, the presentation ID as the work span ID, and the scenario ID as the parent ID. Keep user data out of events and diagnostics. List the names in `catalog.lifecycle`. The library adds `scenario.prepare` itself. `Examples/AgentLab/AgentIntegration/LabEvents.swift` maps a whole model's changes in about 60 lines.
+
+## Invariants, experiments and operator prompts
+
+- **Invariants** state what must hold after every change. The runtime evaluates them one run-loop turn after each recorded change and reports each transition to violated once, as a diagnostic with category `invariant`. Keep evaluation cheap; slower than `budgetMicros` is flagged.
+
+  ```swift
+  AgentInvariant("queue.mapConsistent", scope: "app") { screen in
+      let stale = screen.fields["queuedVisibleOnMap"]?.arrayValue ?? []
+      return stale.isEmpty ? .holds : .violated(details: ["queuedVisibleOnMap": .array(stale)])
+  }
+  ```
+
+- **Experiments** are investigation probes kept apart from product actions, listed under `capabilities.experiments`, read-only unless declared otherwise, and recorded with inputs and results under category `experiment`: `AgentExperiment("probe.stat", input: ObjectSchema(["path": .string()])) { arguments, _ in … }`.
+- **Operator prompts** (`operatorPrompts: true`) let an agent ask the person a question in a floating panel labelled "Agent question (Testing build)". Mutation sessions only.
+- **File fixtures:** link the optional `AgentDevKitFixtures` product to the Testing target only, and build trees with `FileTree([.file("Downloads/a.dmg", size: 5.mb, seed: 3, age: .days(300)), .duplicate(…), .hardLink(…), .package(…)])`. `materialize(in: profile.fixtureDirectory("home"))` resolves the root with `realpath` (`/var` becomes `/private/var`) and returns a manifest with sizes, digests, inodes and duplicate groups.
 
 ## Select a Testing location
 
@@ -131,7 +158,7 @@ Use static names, the presentation ID as the work span ID, and the scenario ID a
   - `LoopbackPairing` stores only a security-scoped bookmark and holds the folder's scope until the session stops.
   - Bind `session.pair()` and `session.forgetPairing()` to Testing-only controls.
 
-See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.5.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
+See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.7.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
 
 ## Verify the integration
 
@@ -142,7 +169,6 @@ See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.
    - exercise an allowed operation;
    - assert the target screen with XCUITest or external AX;
    - check that a read-only session denies a mutation.
-3. In Release:
-   - inspect link inputs, dependencies and binary symbols;
-   - launch it with the same opt-in argument and confirm it publishes no session.
-4. Record the exact commands and observed results.
+3. In Release, run `agentdevctl audit-release PATH/App.app --forbid AgentDevKit,TestingSession`. It checks every Mach-O slice's symbols, linked and embedded libraries, launches with the opt-in argument to confirm no session is published, and prints architectures and signing. Exit 4 means a finding.
+4. Run `agentdevctl doctor PATH/App-Testing.app --expect-id SOME_ID` once to confirm every startup stage.
+5. Record the exact commands and observed results.

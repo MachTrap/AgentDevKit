@@ -1,5 +1,30 @@
 # Migration guide
 
+## v0.5 to v0.7
+
+v0.6 and v0.7 come from adopting AgentDevKit in DiskUnbloat, a SwiftUI disk analyzer. The wire protocol stays `agentdevkit/2`, and every wire change is additive: new methods, optional fields and optional arguments. A v0.5 client still works against a v0.7 host for every v0.5 method; capabilities list `features` so newer clients can feature-detect.
+
+| Change | What to do |
+| --- | --- |
+| Unknown conditions, routes, fixtures, actions, scopes and experiments carry `details.validNames`, `closest` and `example` | Nothing. Error codes are unchanged (`ROUTE_NOT_FOUND`, `FIXTURE_NOT_FOUND`, `ACTION_NOT_FOUND`, otherwise `INVALID_PARAMS`) |
+| camelCase condition IDs resolve (`state.fieldEquals`); `WaitState.condition` reports the canonical ID | Nothing |
+| `fixtures.load`, `scenario.prepare` and `actions.invoke` answer `accepted` when the work outlasts the deadline | Clients that treated a slow load as `TIMEOUT` now get `accepted` with `operationId` (`FixtureState.operationId`, `ScenarioState.operationId`). Follow with `wait --operation` or `--wait`. Other mutations get a retryable `CONFLICT` naming the operation until it ends, up to `Limits.maxTrackedMs` (30 s) |
+| `operations.status` | Ask it after `CONNECTION_LOST`; the CLI and MCP do this automatically for mutations |
+| `AgentAction(..., presentsUI: true)` and `AgentRuntime.track(_:scope:body:)` | Mark actions that open panels or alerts; wrap long app work in `track` and return its outcome |
+| `ui.capture` defaults to `mode: active` (main window plus sheets, popovers and alerts) | Pass `mode: window` for the v0.5 single-window image. New fields: `mode`, `surfaces`, `approximations`, `appearance`, `locale`, `origin` |
+| The default window is the main document window, not the key window | An alert or panel is no longer captured instead of the window. Apps that override `window(for:)` keep their choice; `main` is an alias |
+| `ui.press --id` with several matches fails with `AMBIGUOUS_ELEMENT` | Pass `--index` (v0.5 behavior was index 0) or `--path` from `ui tree` |
+| `PressRequest.identifier` is optional (a locator may use `path`, or `role` with `label`) | Swift code that reads `request.identifier` as a `String` unwraps it; `PressRequest(identifier:)` still compiles |
+| AppKit buttons, sliders and steppers are pressed and stepped through `sendAction` instead of `performClick` | No API change; avoids a nested event loop on the main thread during a bridge request |
+| `UIAccess.perform` and `UIAccess.input` are part of `.all` | Apps using `ui: .all` now serve `ui.perform`, `ui.key`, `ui.hover`, `ui.scroll` to mutation sessions. List `[.capture, .tree, .press]` to keep the v0.5 set |
+| `AgentCatalog.invariants`, `.experiments`, `.operatorPrompts` | Optional. Built-in diagnostic categories `invariant`, `experiment` and `operator` are added when used |
+| `privacy.status` (`agentdevctl tcc status`) | Read-only, served by every adapter-backed host |
+| `AgentDevKitFixtures` product, `TestingProfile.fixtureDirectory(_:)` | Optional, Testing targets only |
+| The listener keeps a connection 1 s past `maxTimeoutMs`; a result finished just past its deadline is still sent | No API change |
+| The host holds a latency-critical activity while a session runs | Testing builds launched in the background keep their deadlines under App Nap |
+| CLI: default session (`AGENTDEVKIT_SESSION`, `.agentdevkit.json`), `--opt=value`, `state --field/--fields`, `wait --until/--every-ms`, per-command usage, `launch`, `doctor`, `recipe`, `audit-release`, `tcc reset`, `desktop`, `ui` subcommands, `--baseline` | `session list --json` prints `{"sessions", "defaultSessionId", "defaultSource"}` instead of an array only when a default applies |
+| MCP: one tool per operation (28 tools), `fields` on state and observe, `until` and `everyMs` on wait, `wait` on tracked tools; `AGENTDEVKIT_SESSION` as default `sessionId` | Re-read the tool list |
+
 ## v0.4 to v0.5
 
 v0.5 comes from building Tern 2, a larger SwiftUI client with actor-based storage, Liquid Glass and streaming work. The wire protocol stays `agentdevkit/2`; v0.4 tools can talk to v0.5 apps for every v0.4 method.

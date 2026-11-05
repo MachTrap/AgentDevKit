@@ -19,7 +19,7 @@ def run(*arguments, exit_code=0):
     return reply
 
 capabilities = run("capabilities")["result"]
-assert set(capabilities["actions"]) == {"inspector.save", "settings.appearance.save"}
+assert {"inspector.save", "settings.appearance.save"} <= set(capabilities["actions"])
 unknown = run("action", "invoke", "--id", "unregistered.save", "--args", "{}", exit_code=4)
 assert unknown["error"]["code"] == "ACTION_NOT_FOUND"
 

@@ -24,13 +24,17 @@ public struct AgentHostConfiguration: Sendable {
         public var maxTimeoutMs: Int
         /// Time reserved at the end of a deadline so a wait can still encode and send its response.
         public var waitMarginMs: Int
+        /// How long a tracked command (`fixtures.load`, `scenario.prepare`, `actions.invoke`) may keep running
+        /// after it answered `accepted`. Other mutations wait for it and get a retryable CONFLICT meanwhile.
+        public var maxTrackedMs: Int
 
         public init(
             requestsPerSecond: Int = 30, rejectedRequestsPerSecond: Int = 10, maxConnections: Int = 4,
             maxRequestBytes: Int = Wire.maxRequestBytes, maxResponseBytes: Int = Wire.maxFrameBytes,
             requestReadTimeoutMs: Int = 500, retainedRequestIds: Int = 256, replayCacheBytes: Int = 2_097_152,
-            maxTimeoutMs: Int = Wire.maxTimeoutMs, waitMarginMs: Int = 120
+            maxTimeoutMs: Int = Wire.maxTimeoutMs, waitMarginMs: Int = 120, maxTrackedMs: Int = 30_000
         ) {
+            self.maxTrackedMs = maxTrackedMs
             self.replayCacheBytes = replayCacheBytes
             self.maxTimeoutMs = maxTimeoutMs
             self.waitMarginMs = waitMarginMs
@@ -55,7 +59,8 @@ public struct AgentHostConfiguration: Sendable {
                 retainedRequestIds: retainedRequestIds.clamped(16...4_096),
                 replayCacheBytes: replayCacheBytes.clamped(0...16_777_216),
                 maxTimeoutMs: maxTimeoutMs.clamped(500...Wire.timeoutCeilingMs),
-                waitMarginMs: waitMarginMs.clamped(20...400)
+                waitMarginMs: waitMarginMs.clamped(20...400),
+                maxTrackedMs: maxTrackedMs.clamped(1_000...300_000)
             )
         }
     }
