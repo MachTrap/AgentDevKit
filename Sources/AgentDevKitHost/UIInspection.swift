@@ -15,21 +15,37 @@ enum UIInspection {
     ) -> [AppCommand] {
         var commands: [AppCommand] = []
         let window = Schema.string(maxLength: 256)
+        let locator: [String: Schema] = [
+            "identifier": .string(maxLength: 256), "path": .string(maxLength: 1_024), "role": .string(maxLength: 64),
+            "label": .string(maxLength: 256), "index": .integer(minimum: 0, maximum: 100), "windowId": window,
+        ]
+        let format = Schema.string(maxLength: 8, oneOf: ["png", "jpeg"])
+        let mode = Schema.string(maxLength: 16, oneOf: ["active", "window"])
         if access.contains(.capture) {
             commands.append(AppCommand(UICommands.capture, parameters: ObjectSchema([
-                "windowId": window, "format": .string(maxLength: 8, oneOf: ["png", "jpeg"]),
+                "windowId": window, "format": format,
                 "maxDimension": .integer(minimum: 64, maximum: 4_096), "method": .string(maxLength: 16, oneOf: ["composite", "display"]),
+                "mode": mode, "surfaceId": window, "revision": .integer(minimum: 0),
             ])) { input, _ in
-                try capture(input, window: adapter.window(for: input.windowId), revision: runtime.revision,
-                            budget: maxResponseBytes)
+                MenuTracker.start()
+                try checkRevision(input.revision, runtime)
+                return try capture(input, adapter: adapter, revision: runtime.revision, budget: maxResponseBytes)
+            })
+            commands.append(AppCommand(UICommands.surfaces, parameters: .empty) { _, _ in
+                MenuTracker.start()
+                let surfaces = Surfaces.list(secrets: adapter.secretValues())
+                return SurfaceList(surfaces: surfaces, truncated: Surfaces.visibleWindows().count > Surfaces.maxSurfaces,
+                                   revision: runtime.revision, modalId: NSApp.modalWindow.map(Surfaces.id))
             })
         }
         if access.contains(.tree) {
             commands.append(AppCommand(UICommands.tree, parameters: ObjectSchema([
                 "windowId": window, "identifierPrefix": .string(maxLength: 256), "onlyIdentified": .boolean,
                 "maxDepth": .integer(minimum: 1, maximum: 60), "limit": .integer(minimum: 1, maximum: Int64(maxElements)),
-                "source": .string(maxLength: 16, oneOf: ["accessibility", "appkit", "views"]),
+                "source": .string(maxLength: 16, oneOf: ["accessibility", "appkit", "views"]), "lint": .boolean,
+                "revision": .integer(minimum: 0),
             ])) { input, _ in
+                try checkRevision(input.revision, runtime)
                 let target = try require(adapter.window(for: input.windowId))
                 if input.source == "views" {
                     return views(target, request: input, revision: runtime.revision)
@@ -43,59 +59,126 @@ enum UIInspection {
                 // change may build nodes rather than report them, so warm up, let the main run loop turn, then read.
                 _ = AccessibilityClient.tree(window: target, request: TreeRequest(limit: 1), secrets: [])
                 try? await Task.sleep(for: .milliseconds(40))
-                let elements = AccessibilityClient.tree(window: target, request: input, secrets: secrets)
-                let size = target.contentView?.bounds.size ?? .zero
-                if let elements {
-                    return UITree(windowId: target.identifier?.rawValue, title: target.title, size: [Double(size.width), Double(size.height)],
-                                  elements: elements.list, truncated: elements.truncated, revision: runtime.revision)
-                }
-                return try tree(input, window: target, secrets: secrets, revision: runtime.revision)
+                try checkRevision(input.revision, runtime)
+                return try accessibilityTree(input, window: target, secrets: secrets, revision: runtime.revision)
+            })
+        }
+        if access.contains(.capture), access.contains(.tree) {
+            commands.append(AppCommand(UICommands.snapshot, parameters: ObjectSchema([
+                "windowId": window, "mode": mode, "format": format, "maxDimension": .integer(minimum: 64, maximum: 4_096),
+                "identifierPrefix": .string(maxLength: 256), "onlyIdentified": .boolean,
+                "limit": .integer(minimum: 1, maximum: Int64(maxElements)),
+            ])) { input, _ in
+                MenuTracker.start()
+                let target = try require(adapter.window(for: input.windowId))
+                _ = AccessibilityClient.tree(window: target, request: TreeRequest(limit: 1), secrets: [])
+                try? await Task.sleep(for: .milliseconds(40))
+                // Everything below runs in one main-actor turn, so the image, tree and revision agree.
+                let secrets = adapter.secretValues().filter { !$0.isEmpty }.sorted { $0.count > $1.count }
+                let revision = runtime.revision
+                let tree = try accessibilityTree(TreeRequest(windowId: input.windowId, identifierPrefix: input.identifierPrefix,
+                                                             onlyIdentified: input.onlyIdentified, limit: input.limit ?? 400),
+                                                 window: target, secrets: secrets, revision: revision)
+                let treeBytes = (try? JSONEncoder().encode(tree).count) ?? 0
+                let surfaces = Surfaces.list(secrets: secrets)
+                let capture = try capture(CaptureRequest(windowId: input.windowId, format: input.format, maxDimension: input.maxDimension,
+                                                         mode: input.mode),
+                                          adapter: adapter, revision: revision, budget: max(65_536, maxResponseBytes - treeBytes - 16_384))
+                return UISnapshot(revision: revision, capture: capture, tree: tree, surfaces: surfaces)
             })
         }
         if access.contains(.press) {
-            commands.append(AppCommand(UICommands.press, parameters: ObjectSchema([
-                "identifier": .string(maxLength: 256), "windowId": window, "index": .integer(minimum: 0, maximum: 100),
-            ], required: ["identifier"])) { input, _ in
-                let target = try require(adapter.window(for: input.windowId))
-                var outcome = AccessibilityClient.press(window: target, identifier: input.identifier, index: input.index ?? 0)
-                if case .notFound = outcome {
-                    // SwiftUI may have built the element's accessibility node during that first search.
-                    try? await Task.sleep(for: .milliseconds(60))
-                    outcome = AccessibilityClient.press(window: target, identifier: input.identifier, index: input.index ?? 0)
+            var press = locator
+            press["windowId"] = window
+            commands.append(AppCommand(UICommands.press, parameters: ObjectSchema(press)) { input, _ in
+                let locator = input.locator
+                guard !locator.isEmpty else {
+                    throw Failure(.invalidParams, "Pass identifier, path, or role and label.", details: ["field": "identifier"])
                 }
-                switch outcome {
-                case .pressed(let role):
+                let windows = try targets(locator.windowId, adapter: adapter)
+                switch try await UIOperations.press(locator, in: windows) {
+                case .pressed(let role, let path):
                     // Let the action's state changes land before reporting the revision.
                     try? await Task.sleep(for: .milliseconds(50))
-                    return PressResult(identifier: input.identifier, role: role, revision: runtime.revision)
-                case .disabled:
-                    throw Failure(.notReady, "The element is disabled.", retryable: true, details: ["field": "identifier"])
-                case .unsupported:
-                    throw Failure(.notReady, "The element does not support pressing.", details: ["field": "identifier"])
-                case .notFound:
-                    throw Failure(.notReady, "No element has this accessibility identifier.", retryable: true, details: ["field": "identifier"])
+                    var result = PressResult(identifier: locator.identifier ?? path ?? "", role: role, revision: runtime.revision)
+                    result.path = path
+                    result.evidence = "accessibility"
+                    return result
                 case .unavailable:
-                    return try await press(input, window: target, runtime: runtime)
+                    guard let identifier = locator.identifier else {
+                        throw Failure(.notReady, "The accessibility API is unavailable; only identifier locators work.", details: ["field": "path"])
+                    }
+                    return try await self.press(PressRequest(identifier: identifier, windowId: locator.windowId, index: locator.index),
+                                                window: windows.first, runtime: runtime)
                 }
+            })
+        }
+        if access.contains(.perform) {
+            var perform = locator
+            perform["operation"] = .string(maxLength: 16, oneOf: UIOperations.operations)
+            perform["value"] = .value
+            perform["item"] = .string(maxLength: 256)
+            commands.append(AppCommand(UICommands.perform, parameters: ObjectSchema(perform, required: ["operation"])) { input, _ in
+                let windows = try targets(input.windowId, adapter: adapter)
+                return try await UIOperations.perform(input, in: windows, runtime: runtime)
+            })
+        }
+        if access.contains(.input) {
+            commands.append(AppCommand(UICommands.key, parameters: ObjectSchema([
+                "keys": .string(maxLength: 512), "modifiers": .array(.string(maxLength: 16, oneOf: InputSynthesis.modifierNames), maxItems: 4),
+                "windowId": window,
+            ], required: ["keys"])) { input, _ in
+                try await InputSynthesis.keys(input, window: require(adapter.window(for: input.windowId)), runtime: runtime)
+            })
+            var pointer = locator
+            pointer["x"] = .number
+            pointer["y"] = .number
+            commands.append(AppCommand(UICommands.hover, parameters: ObjectSchema(pointer)) { input, _ in
+                let windows = try targets(input.windowId, adapter: adapter)
+                return try await InputSynthesis.hover(input, windows: windows, runtime: runtime)
+            })
+            var scroll = pointer
+            scroll["dy"] = .number
+            scroll["dx"] = .number
+            commands.append(AppCommand(UICommands.scroll, parameters: ObjectSchema(scroll, required: ["dy"])) { input, _ in
+                let windows = try targets(input.windowId, adapter: adapter)
+                return try await InputSynthesis.scroll(input, windows: windows, runtime: runtime)
             })
         }
         return commands
     }
 
+    static func checkRevision(_ expected: UInt64?, _ runtime: AgentRuntime) throws {
+        guard let expected, expected != runtime.revision else { return }
+        throw Failure(.staleRevision, "State changed after the expected revision.", retryable: true,
+                      details: ["expectedRevision": .integer(Int64(expected)), "latestRevision": .integer(Int64(runtime.revision))])
+    }
+
+    /// The windows a locator searches: the named window, or the default window and every surface above it, front first.
+    static func targets<Adapter: AgentAdapter>(_ windowId: String?, adapter: Adapter) throws -> [NSWindow] {
+        if let windowId, !windowId.isEmpty, windowId != "main" {
+            return [try require(adapter.window(for: windowId) ?? Surfaces.resolve(windowId))]
+        }
+        let base = try require(adapter.window(for: windowId))
+        return Surfaces.layers(above: base).reversed() + [base]
+    }
+
+    static func accessibilityTree(_ input: TreeRequest, window target: NSWindow, secrets: [String], revision: UInt64) throws -> UITree {
+        let size = target.contentView?.bounds.size ?? .zero
+        guard let elements = AccessibilityClient.tree(window: target, request: input, secrets: secrets) else {
+            return try tree(input, window: target, secrets: secrets, revision: revision)
+        }
+        var tree = UITree(windowId: target.identifier?.rawValue, title: target.title, size: [Double(size.width), Double(size.height)],
+                          elements: elements.list, truncated: elements.truncated, revision: revision)
+        if input.lint == true { tree.lint = elements.lint }
+        return tree
+    }
+
     // MARK: Windows
 
-    /// Exact identifier, then identifier prefix, then title; with no ID, the key, main or first visible window.
-    static func defaultWindow(_ windowId: String?) -> NSWindow? {
-        let windows = NSApp.windows.filter { $0.isVisible && !$0.isMiniaturized && $0.contentView != nil }
-        guard let windowId, !windowId.isEmpty else {
-            return NSApp.keyWindow.flatMap { windows.contains($0) ? $0 : nil }
-                ?? NSApp.mainWindow.flatMap { windows.contains($0) ? $0 : nil }
-                ?? windows.first { $0.canBecomeMain } ?? windows.first
-        }
-        return windows.first { $0.identifier?.rawValue == windowId }
-            ?? windows.first { $0.identifier?.rawValue.hasPrefix(windowId) == true }
-            ?? windows.first { $0.title == windowId }
-    }
+    /// With no ID or `main`, the main document window (never an alert or panel while one is visible);
+    /// otherwise an exact identifier, `window-<number>`, an identifier prefix, then a title.
+    static func defaultWindow(_ windowId: String?) -> NSWindow? { Surfaces.resolve(windowId) }
 
     static func require(_ window: NSWindow?) throws -> NSWindow {
         guard let window else {
@@ -106,16 +189,50 @@ enum UIInspection {
 
     // MARK: Capture
 
-    static func capture(_ input: CaptureRequest, window: NSWindow?, revision: UInt64, budget: Int) throws -> WindowCapture {
-        let window = try require(window)
-        // The theme frame includes the title bar and toolbar, not just the content view.
-        guard let view = window.contentView?.superview ?? window.contentView else {
-            throw Failure(.notReady, "The window has no content to render.", retryable: true)
+    static func capture<Adapter: AgentAdapter>(_ input: CaptureRequest, adapter: Adapter, revision: UInt64, budget: Int) throws -> WindowCapture {
+        if let surfaceId = input.surfaceId {
+            guard let surface = Surfaces.resolve(surfaceId) else {
+                throw Failure(.notReady, "No visible surface matches.", retryable: true, details: ["field": "surfaceId"])
+            }
+            var result = try capture(input, window: surface, revision: revision, budget: budget, layers: [])
+            result.mode = "surface"
+            return result
         }
-        view.layoutSubtreeIfNeeded()
-        let bounds = view.bounds
-        guard bounds.width >= 1, bounds.height >= 1, let source = input.method == "display" ? displayed(view) : composited(view, window: window) else {
+        let base = try require(adapter.window(for: input.windowId))
+        let layers = input.mode == "window" ? [] : Surfaces.layers(above: base)
+        var result = try capture(input, window: base, revision: revision, budget: budget, layers: layers)
+        result.mode = input.mode ?? "active"
+        return result
+    }
+
+    /// Renders `window`, then each layer over it in screen position, into one image that covers them all.
+    /// With no layers the result matches the v0.5 single-window capture, which also draws an attached sheet.
+    static func capture(_ input: CaptureRequest, window: NSWindow?, revision: UInt64, budget: Int, layers: [NSWindow] = []) throws -> WindowCapture {
+        let window = try require(window)
+        guard let rendered = render(window, method: input.method, drawSheet: layers.isEmpty) else {
             throw Failure(.notReady, "The window has no visible size.", retryable: true)
+        }
+        var approximations = Set(rendered.approximations)
+        var source = rendered.image
+        var drawn = [Surfaces.id(window)]
+        var pointWidth = window.frame.width
+        var origin: [Double]?
+        if !layers.isEmpty {
+            var parts: [(window: NSWindow, image: NSBitmapImageRep)] = [(window, rendered.image)]
+            for layer in layers {
+                guard let image = render(layer, method: input.method, drawSheet: false) else { continue }
+                approximations.formUnion(image.approximations)
+                parts.append((layer, image.image))
+                drawn.append(Surfaces.id(layer))
+            }
+            if parts.count > 1, let combined = compose(parts, base: window) {
+                source = combined.image
+                pointWidth = combined.bounds.width
+                let offset = [Double(window.frame.minX - combined.bounds.minX), Double(combined.bounds.maxY - window.frame.maxY)]
+                if offset != [0, 0] { origin = offset }
+            } else {
+                drawn = [Surfaces.id(window)]
+            }
         }
 
         // Base64 adds a third, and the envelope needs room.
@@ -132,14 +249,94 @@ enum UIInspection {
                 ? image.representation(using: .jpeg, properties: [.compressionFactor: quality])
                 : image.representation(using: .png, properties: [:])
             if let data, data.count <= byteBudget {
-                return WindowCapture(windowId: window.identifier?.rawValue, title: window.title, width: width, height: height,
-                                     scale: Double(width) / bounds.width, format: format, data: data.base64EncodedString(),
-                                     bytes: data.count, revision: revision)
+                var result = WindowCapture(windowId: window.identifier?.rawValue, title: window.title, width: width, height: height,
+                                           scale: Double(width) / pointWidth, format: format, data: data.base64EncodedString(),
+                                           bytes: data.count, revision: revision)
+                result.surfaces = drawn
+                result.approximations = approximations.isEmpty ? nil : approximations.sorted()
+                result.appearance = window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+                result.locale = Bundle.main.preferredLocalizations.first.map { String($0.prefix(while: { $0 != "-" && $0 != "_" })) }
+                result.origin = origin
+                return result
             }
             // Too large: try JPEG first, then a smaller image.
             if format == "png" { format = "jpeg" } else { longest *= 0.75 }
         }
         throw Failure(.responseTooLarge, "The capture does not fit the session's response limit.", details: ["field": "maxDimension"])
+    }
+
+    /// One window's drawing, at its backing scale. `approximations` names effects drawn approximately.
+    static func render(_ window: NSWindow, method: String?, drawSheet: Bool) -> (image: NSBitmapImageRep, approximations: [String])? {
+        if Surfaces.kind(window) == .popover, let popover = renderPopover(window, method: method) { return popover }
+        // The theme frame includes the title bar and toolbar, not just the content view.
+        guard let view = window.contentView?.superview ?? window.contentView else { return nil }
+        view.layoutSubtreeIfNeeded()
+        guard view.bounds.width >= 1, view.bounds.height >= 1 else { return nil }
+        // Open and save panels and some extensions draw in another process; their content is not in this image.
+        let remote = containsRemoteView(view) ? ["remoteContent"] : []
+        if method == "display" { return displayed(view).map { ($0, remote) } }
+        var approximated = false
+        guard let image = composited(view, window: window, drawSheet: drawSheet, approximated: &approximated) else { return nil }
+        return (image, (approximated ? ["glassEffect"] : []) + remote)
+    }
+
+    /// A popover's frame view draws its glass shape mask rather than what a person sees, so draw the content view
+    /// over an approximation of the popover background.
+    private static func renderPopover(_ window: NSWindow, method: String?) -> (image: NSBitmapImageRep, approximations: [String])? {
+        guard let content = window.contentView else { return nil }
+        content.layoutSubtreeIfNeeded()
+        var approximated = false
+        guard content.bounds.width >= 1, content.bounds.height >= 1,
+              let drawn = method == "display" ? displayed(content) : composited(content, window: window, drawSheet: false, approximated: &approximated)
+        else { return nil }
+        let size = window.frame.size
+        let scale = CGFloat(drawn.pixelsWide) / max(1, content.bounds.width)
+        guard let canvas = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        canvas.size = size
+        guard let context = NSGraphicsContext(bitmapImageRep: canvas) else { return nil }
+        let frame = content.convert(content.bounds, to: nil)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        window.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let shape = NSBezierPath(roundedRect: frame, xRadius: 12, yRadius: 12)
+            NSColor.windowBackgroundColor.setFill()
+            shape.fill()
+            NSColor.separatorColor.setStroke()
+            shape.lineWidth = 1
+            shape.stroke()
+        }
+        drawn.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        return (canvas, ["popoverChrome"] + (approximated ? ["glassEffect"] : []))
+    }
+
+    private static func containsRemoteView(_ view: NSView, depth: Int = 0) -> Bool {
+        if String(describing: type(of: view)).contains("RemoteView") { return true }
+        guard depth < 12 else { return false }
+        return view.subviews.contains { containsRemoteView($0, depth: depth + 1) }
+    }
+
+    /// Draws each part at its screen position on a canvas covering all of them, at the base window's scale.
+    private static func compose(_ parts: [(window: NSWindow, image: NSBitmapImageRep)], base: NSWindow) -> (image: NSBitmapImageRep, bounds: NSRect)? {
+        let bounds = parts.reduce(NSRect.null) { $0.union($1.window.frame) }
+        let scale = max(1, base.backingScaleFactor)
+        guard bounds.width >= 1, bounds.height >= 1,
+              let canvas = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        canvas.size = bounds.size
+        guard let context = NSGraphicsContext(bitmapImageRep: canvas) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        for part in parts {
+            let frame = NSRect(x: part.window.frame.minX - bounds.minX, y: part.window.frame.minY - bounds.minY,
+                               width: part.window.frame.width, height: part.window.frame.height)
+            part.image.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return (canvas, bounds)
     }
 
     /// AppKit drawing. Misses content hosted in glass effect views.
@@ -152,14 +349,15 @@ enum UIInspection {
     /// AppKit drawing of the window, then the content of every glass effect view drawn in place.
     /// AppKit drawing skips glass content, which the window server composites, so it is drawn
     /// separately over an approximation of the glass. Refraction and blur are not reproduced.
-    private static func composited(_ view: NSView, window: NSWindow) -> NSBitmapImageRep? {
+    private static func composited(_ view: NSView, window: NSWindow, drawSheet: Bool, approximated: inout Bool) -> NSBitmapImageRep? {
         let base: NSBitmapImageRep?
-        if #available(macOS 26.0, *) { base = compositedGlass(view, window: window) }
+        if #available(macOS 26.0, *) { base = compositedGlass(view, window: window, approximated: &approximated) }
         else { base = displayed(view).flatMap { canvas(like: $0, window: window) } }
         guard let base else { return nil }
         // A sheet is its own window; draw it where it appears over its parent.
-        if let sheet = window.attachedSheet, let sheetView = sheet.contentView?.superview ?? sheet.contentView,
-           let image = composited(sheetView, window: sheet), let context = NSGraphicsContext(bitmapImageRep: base) {
+        if drawSheet, let sheet = window.attachedSheet, let sheetView = sheet.contentView?.superview ?? sheet.contentView,
+           let image = composited(sheetView, window: sheet, drawSheet: true, approximated: &approximated),
+           let context = NSGraphicsContext(bitmapImageRep: base) {
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = context
             let frame = NSRect(x: sheet.frame.minX - window.frame.minX, y: sheet.frame.minY - window.frame.minY,
@@ -192,7 +390,7 @@ enum UIInspection {
     }
 
     @available(macOS 26.0, *)
-    private static func compositedGlass(_ view: NSView, window: NSWindow) -> NSBitmapImageRep? {
+    private static func compositedGlass(_ view: NSView, window: NSWindow, approximated: inout Bool) -> NSBitmapImageRep? {
         guard let drawn = displayed(view), let base = canvas(like: drawn, window: window),
               let context = NSGraphicsContext(bitmapImageRep: base) else { return nil }
         // Drawing into the representation uses its size in points, not pixels.
@@ -203,6 +401,7 @@ enum UIInspection {
             for child in node.subviews where !child.isHidden { find(child) }
         }
         find(view)
+        if !glass.isEmpty { approximated = true }
         func place(_ frame: NSRect) -> NSRect {
             let y = view.isFlipped ? view.bounds.height - frame.maxY : frame.minY
             return NSRect(x: frame.minX * scale, y: y * scale, width: frame.width * scale, height: frame.height * scale)
@@ -378,7 +577,7 @@ enum UIInspection {
         }
         // Let the action's state changes land before reporting the revision.
         await Task.yield()
-        return PressResult(identifier: input.identifier, role: element.role ?? "", revision: runtime.revision)
+        return PressResult(identifier: input.identifier ?? "", role: element.role ?? "", revision: runtime.revision)
     }
 }
 
@@ -465,21 +664,16 @@ enum AccessibilityClient {
     struct Elements: Sendable {
         let list: [UIElement]
         let truncated: Bool
-    }
-
-    enum PressOutcome: Sendable {
-        case pressed(role: String)
-        case disabled, unsupported, notFound
-        /// The accessibility API is not available to this process.
-        case unavailable
+        let lint: [IdentifierLint]
     }
 
     private static var attributes: [String] { [kAXRoleAttribute, kAXSubroleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute,
                                      kAXTitleAttribute, kAXValueAttribute, kAXPositionAttribute, kAXSizeAttribute,
                                      kAXEnabledAttribute, kAXFocusedAttribute, kAXSelectedAttribute, kAXChildrenAttribute,
-                                     kAXVisibleRowsAttribute] }
+                                     kAXVisibleRowsAttribute, kAXValueDescriptionAttribute, kAXMinValueAttribute,
+                                     kAXMaxValueAttribute, kAXValueIncrementAttribute] }
 
-    private struct Node {
+    struct Node {
         let element: AXUIElement
         let values: [String: CFTypeRef]
 
@@ -487,7 +681,13 @@ enum AccessibilityClient {
             guard let value = values[name] else { return nil }
             return AccessibilityClient.text(value)
         }
+        func number(_ name: String) -> Double? {
+            guard let value = values[name], CFGetTypeID(value) == CFNumberGetTypeID() || CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return (value as? NSNumber)?.doubleValue
+        }
         func bool(_ name: String, _ fallback: Bool) -> Bool { (values[name] as? Bool) ?? fallback }
+        var role: String? { string(kAXRoleAttribute) }
+        var identifier: String? { string(kAXIdentifierAttribute).flatMap { $0.isEmpty ? nil : $0 } }
         /// Children, or for outlines and tables that report none, their visible rows.
         var children: [AXUIElement] {
             let children = (values[kAXChildrenAttribute] as? [AXUIElement]) ?? []
@@ -504,9 +704,30 @@ enum AccessibilityClient {
             }
             return CGRect(origin: point, size: size)
         }
+        var actions: [String] {
+            var names: CFArray?
+            guard AXUIElementCopyActionNames(element, &names) == .success, let list = names as? [String] else { return [] }
+            return list.map(AccessibilityClient.actionName)
+        }
+        func settable(_ attribute: String) -> Bool {
+            var settable: DarwinBoolean = false
+            return AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success && settable.boolValue
+        }
     }
 
-    private static func read(_ element: AXUIElement) -> Node? {
+    /// `AXPress` → `press`, `AXShowMenu` → `showMenu`.
+    nonisolated static func actionName(_ raw: String) -> String {
+        guard raw.hasPrefix("AX"), raw.count > 2 else { return raw }
+        let name = raw.dropFirst(2)
+        return name.prefix(1).lowercased() + name.dropFirst()
+    }
+
+    /// A role as a path segment and locator: `AXCheckBox` → `checkbox`.
+    nonisolated static func roleName(_ role: String) -> String {
+        (role.hasPrefix("AX") ? String(role.dropFirst(2)) : role).lowercased()
+    }
+
+    static func read(_ element: AXUIElement) -> Node? {
         var raw: CFArray?
         let names = attributes
         guard AXUIElementCopyMultipleAttributeValues(element, names.map { $0 as CFString } as CFArray, [], &raw) == .success,
@@ -520,9 +741,10 @@ enum AccessibilityClient {
         return Node(element: element, values: map)
     }
 
-    /// The accessibility element of a window, matched by its frame, then by title. Accessibility
-    /// frames use a top-left origin on the primary screen; AppKit frames use a bottom-left origin.
-    private static func window(_ target: NSWindow) -> AXUIElement? {
+    /// The accessibility element of a window, matched by its frame, then by title. Sheets and popovers may be
+    /// children of their parent's element rather than top-level windows. Accessibility frames use a top-left
+    /// origin on the primary screen; AppKit frames use a bottom-left origin.
+    static func window(_ target: NSWindow) -> AXUIElement? {
         let app = AXUIElementCreateApplication(getpid())
         AXUIElementSetMessagingTimeout(app, 3)
         var raw: CFTypeRef?
@@ -530,13 +752,30 @@ enum AccessibilityClient {
               let windows = raw as? [AXUIElement], !windows.isEmpty else { return nil }
         let height = NSScreen.screens.first?.frame.height ?? target.frame.maxY
         let expected = CGRect(x: target.frame.minX, y: height - target.frame.maxY, width: target.frame.width, height: target.frame.height)
+        func matches(_ frame: CGRect) -> Bool {
+            abs(frame.minX - expected.minX) < 2 && abs(frame.minY - expected.minY) < 2 &&
+                abs(frame.width - expected.width) < 2 && abs(frame.height - expected.height) < 2
+        }
         var titled: AXUIElement?
         for window in windows {
             guard let node = read(window) else { continue }
-            let frame = node.frame
-            if abs(frame.minX - expected.minX) < 2, abs(frame.minY - expected.minY) < 2,
-               abs(frame.width - expected.width) < 2, abs(frame.height - expected.height) < 2 { return window }
+            if matches(node.frame) { return window }
             if titled == nil, let title = node.string(kAXTitleAttribute), !target.title.isEmpty, title.hasPrefix(target.title) { titled = window }
+        }
+        let attached = target.isSheet || Surfaces.kind(target) == .popover || target.parent != nil
+        if attached {
+            // Attached surfaces are reported as AXSheet or AXPopover elements inside their parent window,
+            // a popover under the control that shows it. Search breadth first.
+            var queue: [(AXUIElement, Int)] = windows.map { ($0, 0) }
+            var visited = 0
+            while !queue.isEmpty, visited < 4_000 {
+                let (element, depth) = queue.removeFirst()
+                visited += 1
+                guard let node = read(element) else { continue }
+                if depth > 0, let role = node.role, [kAXSheetRole, "AXPopover", kAXWindowRole].contains(role), matches(node.frame) { return element }
+                if depth < 12 { queue += node.children.map { ($0, depth + 1) } }
+            }
+            return nil
         }
         return titled ?? (windows.count == 1 ? windows.first : nil)
     }
@@ -550,15 +789,27 @@ enum AccessibilityClient {
         }
     }
 
-    static func tree(window target: NSWindow, request: TreeRequest, secrets: [String]) -> Elements? {
+    /// One visited element with its stable path and nearest identified ancestor.
+    struct Visit {
+        let node: Node
+        let role: String
+        let depth: Int
+        let path: String
+        let containerIdentifier: String?
+        let containerPath: String?
+    }
+
+    /// Walks the window's elements depth first and computes each one's path: identified ancestors, then the
+    /// element's identifier or role, with `[i]` for the i-th sibling of that name under the same ancestor
+    /// (`[0]` is omitted). `visit` returns false to skip children. Returns nil when the API is unavailable.
+    @discardableResult
+    static func walk(window target: NSWindow, maxDepth: Int = 60, visit: (Visit) -> Bool) -> (visited: Int, exhausted: Bool)? {
         guard let window = window(target), let root = read(window) else { return nil }
-        let origin = root.frame.origin
-        let limit = request.limit ?? 800
-        let maxDepth = request.maxDepth ?? 40
-        var list: [UIElement] = []
-        var truncated = false
         var visited = 0
+        var exhausted = false
+        var stopped = false
         var seen: [CFHashCode: [AXUIElement]] = [:]
+        var counts: [String: Int] = [:]
         /// Outlines report the same cells through rows and columns; list each element once.
         func firstVisit(_ element: AXUIElement) -> Bool {
             let hash = CFHash(element)
@@ -566,60 +817,123 @@ enum AccessibilityClient {
             seen[hash, default: []].append(element)
             return true
         }
+        func descend(_ node: Node, depth: Int, prefix: String, container: (identifier: String, path: String)?) {
+            for child in node.children where firstVisit(child) {
+                guard !stopped else { return }
+                visited += 1
+                guard visited < 20_000 else { exhausted = true; stopped = true; return }
+                guard let childNode = read(child) else { continue }
+                guard let role = childNode.role else {
+                    if depth < maxDepth { descend(childNode, depth: depth + 1, prefix: prefix, container: container) }
+                    continue
+                }
+                let identifier = childNode.identifier
+                let base = identifier ?? roleName(role)
+                let key = prefix + "/" + base
+                let index = counts[key, default: 0]
+                counts[key] = index + 1
+                let segment = index == 0 ? base : "\(base)[\(index)]"
+                let path = prefix.isEmpty ? segment : prefix + "/" + segment
+                let deeper = visit(Visit(node: childNode, role: role, depth: depth, path: path,
+                                         containerIdentifier: container?.identifier, containerPath: container?.path))
+                if !deeper { if stopped { return } else { continue } }
+                if depth < maxDepth {
+                    descend(childNode, depth: depth + 1, prefix: identifier != nil ? path : prefix,
+                            container: identifier.map { ($0, path) } ?? container)
+                }
+            }
+        }
+        descend(root, depth: 0, prefix: "", container: nil)
+        return (visited, exhausted)
+    }
+
+    /// Treats a missing `[0]` and an explicit one alike, so `row/checkbox` equals `row[0]/checkbox[0]`.
+    nonisolated static func normalizedPath(_ path: String) -> String {
+        path.split(separator: "/").map { $0.hasSuffix("[0]") ? String($0.dropLast(3)) : String($0) }.joined(separator: "/")
+    }
+
+    static func describe(_ visit: Visit, origin: CGPoint, secrets: [String]) -> UIElement {
         func clean(_ text: String?) -> String? {
             guard var text, !text.isEmpty else { return nil }
             for secret in secrets { text = text.replacingOccurrences(of: secret, with: "<redacted>") }
             return text.count > UIInspection.maxValueLength ? String(text.prefix(UIInspection.maxValueLength)) + "…" : text
         }
-        func visit(_ node: Node, depth: Int) {
-            guard !truncated else { return }
-            visited += 1
-            guard visited < 20_000 else { truncated = true; return }
-            for child in node.children where firstVisit(child) {
-                guard let childNode = read(child) else { continue }
-                if list.count >= limit {
-                    truncated = true
-                    return
-                }
-                let identifier = childNode.string(kAXIdentifierAttribute).flatMap { $0.isEmpty ? nil : $0 }
-                let keep = (request.onlyIdentified != true || identifier != nil)
-                    && (request.identifierPrefix.map { identifier?.hasPrefix($0) == true } ?? true)
-                if keep, let role = childNode.string(kAXRoleAttribute) {
-                    let subrole = childNode.string(kAXSubroleAttribute)
-                    let frame = childNode.frame
-                    let value = subrole == kAXSecureTextFieldSubrole ? nil : clean(childNode.string(kAXValueAttribute))
-                    list.append(UIElement(
-                        role: role, subrole: subrole, identifier: identifier,
-                        label: clean(childNode.string(kAXDescriptionAttribute)) ?? clean(childNode.string(kAXTitleAttribute)),
-                        value: value,
-                        frame: [frame.minX - origin.x, frame.minY - origin.y, frame.width, frame.height].map { (Double($0) * 10).rounded() / 10 },
-                        enabled: childNode.bool(kAXEnabledAttribute, true), focused: childNode.bool(kAXFocusedAttribute, false),
-                        selected: childNode.bool(kAXSelectedAttribute, false), depth: depth))
-                }
-                if depth < maxDepth { visit(childNode, depth: depth + 1) }
-            }
+        let node = visit.node
+        let subrole = node.string(kAXSubroleAttribute)
+        let secure = subrole == kAXSecureTextFieldSubrole
+        let frame = node.frame
+        var element = UIElement(
+            role: visit.role, subrole: subrole, identifier: node.identifier,
+            label: clean(node.string(kAXDescriptionAttribute)) ?? clean(node.string(kAXTitleAttribute)),
+            value: secure ? nil : clean(node.string(kAXValueAttribute)),
+            frame: [frame.minX - origin.x, frame.minY - origin.y, frame.width, frame.height].map { (Double($0) * 10).rounded() / 10 },
+            enabled: node.bool(kAXEnabledAttribute, true), focused: node.bool(kAXFocusedAttribute, false),
+            selected: node.bool(kAXSelectedAttribute, false), depth: visit.depth)
+        if !secure {
+            element.numericValue = node.number(kAXValueAttribute)
+            element.valueDescription = clean(node.string(kAXValueDescriptionAttribute))
         }
-        visit(root, depth: 0)
-        return Elements(list: list, truncated: truncated)
+        element.minValue = node.number(kAXMinValueAttribute)
+        element.maxValue = node.number(kAXMaxValueAttribute)
+        element.step = node.number(kAXValueIncrementAttribute)
+        let actions = node.actions.filter { !$0.isEmpty }
+        element.actions = actions.isEmpty ? nil : Array(actions.prefix(12))
+        element.path = visit.path
+        return element
     }
 
-    static func press(window target: NSWindow, identifier: String, index: Int) -> PressOutcome {
-        guard let window = window(target), let root = read(window) else { return .unavailable }
-        var matches: [Node] = []
-        var visited = 0
-        func search(_ node: Node) {
-            for child in node.children where matches.count <= index && visited < 20_000 {
-                visited += 1
-                guard let childNode = read(child) else { continue }
-                if childNode.string(kAXIdentifierAttribute) == identifier { matches.append(childNode) }
-                search(childNode)
+    static func tree(window target: NSWindow, request: TreeRequest, secrets: [String]) -> Elements? {
+        guard let axWindow = window(target), let root = read(axWindow) else { return nil }
+        let origin = root.frame.origin
+        let limit = request.limit ?? 800
+        let maxDepth = request.maxDepth ?? 40
+        var list: [UIElement] = []
+        var truncated = false
+        var byIdentifier: [String: [String]] = [:]
+        var copied: [(identifier: String, path: String, container: String)] = []
+        var rolesByContainer: [String: Set<String>] = [:]
+        let walked = walk(window: target, maxDepth: maxDepth) { visit in
+            let identifier = visit.node.identifier
+            if request.lint == true, let identifier {
+                byIdentifier[identifier, default: []].append(visit.path)
+                if visit.containerIdentifier == identifier, let container = visit.containerPath {
+                    copied.append((identifier, visit.path, container))
+                }
+                rolesByContainer[(visit.containerPath ?? "") + "\u{1}" + identifier, default: []].insert(visit.role)
+            }
+            let keep = (request.onlyIdentified != true || identifier != nil)
+                && (request.identifierPrefix.map { identifier?.hasPrefix($0) == true } ?? true)
+            if keep {
+                if list.count >= limit {
+                    truncated = true
+                    return request.lint == true
+                }
+                list.append(describe(visit, origin: origin, secrets: secrets))
+            }
+            return true
+        }
+        var lint: [IdentifierLint] = []
+        if request.lint == true {
+            let copyFix = "SwiftUI copied the container's identifier onto its children. Add .accessibilityElement(children: .contain) to the container, after .accessibilityIdentifier, so each child keeps its own identifier."
+            var reported = Set<String>()
+            for entry in copied where reported.insert(entry.identifier).inserted && lint.count < 50 {
+                let paths = copied.filter { $0.identifier == entry.identifier }.flatMap { [$0.container, $0.path] }
+                lint.append(IdentifierLint(kind: .copiedDown, identifier: entry.identifier, paths: Array(NSOrderedSet(array: paths).array.compactMap { $0 as? String }.prefix(8)),
+                                           fix: copyFix))
+            }
+            // A row container that is not an accessibility element passes its identifier to every child,
+            // so one identifier lands on elements of different roles under the same identified container.
+            for (key, roles) in rolesByContainer.sorted(by: { $0.key < $1.key }) where roles.count > 1 && lint.count < 50 {
+                let identifier = String(key.split(separator: "\u{1}").last ?? "")
+                guard reported.insert(identifier).inserted else { continue }
+                lint.append(IdentifierLint(kind: .copiedDown, identifier: identifier, paths: Array((byIdentifier[identifier] ?? []).prefix(8)),
+                                           fix: "\(identifier) is on \(roles.sorted().map(AccessibilityClient.roleName).joined(separator: " and ")) elements in one container: SwiftUI copied a container's identifier, such as a row's, onto each of its children. Add .accessibilityElement(children: .contain) to that container, after .accessibilityIdentifier, so it becomes one element and each child keeps its own identifier."))
+            }
+            for (identifier, paths) in byIdentifier.sorted(by: { $0.key < $1.key }) where paths.count > 1 && lint.count < 50 {
+                lint.append(IdentifierLint(kind: .duplicate, identifier: identifier, paths: Array(paths.prefix(8)),
+                                           fix: "Several elements share this identifier. Give each a unique identifier, or target one with --path or --index."))
             }
         }
-        search(root)
-        guard matches.indices.contains(index) else { return .notFound }
-        let target = matches[index]
-        guard target.bool(kAXEnabledAttribute, true) else { return .disabled }
-        guard AXUIElementPerformAction(target.element, kAXPressAction as CFString) == .success else { return .unsupported }
-        return .pressed(role: target.string(kAXRoleAttribute) ?? "")
+        return Elements(list: list, truncated: truncated || walked?.exhausted == true, lint: lint)
     }
 }

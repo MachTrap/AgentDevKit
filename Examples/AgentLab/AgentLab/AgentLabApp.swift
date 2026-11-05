@@ -192,6 +192,10 @@ private struct WorkspaceView: View {
             Text("Settings").font(.largeTitle).accessibilityIdentifier(LabRoute.settings.accessibilityID)
             Button("Advanced") { model.present(Destination(route: .advanced)) }
                 .accessibilityIdentifier("settings.advanced")
+            Button("Controls") { model.present(Destination(route: .controls)) }
+                .accessibilityIdentifier("settings.controls")
+        case .controls:
+            ControlsPage(model: model)
         case .advanced:
             Text("Advanced").font(.largeTitle).accessibilityIdentifier(LabRoute.advanced.accessibilityID)
             Button("Appearance") { model.present(Destination(route: .appearance)) }
@@ -343,6 +347,103 @@ private struct InspectorPage: View {
             }
         }
         .navigationTitle(project.name)
+    }
+}
+
+/// A disk-cleanup style screen: a map-detail slider in a popover, a menu button, a disclosure, and a
+/// cleanup queue whose rows copy their identifier onto the checkbox (left in on purpose for `ui tree --lint`).
+private struct ControlsPage: View {
+    let model: LabModel
+    @State private var showDisplay = false
+    @FocusState private var queueFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Controls").font(.largeTitle).accessibilityIdentifier(LabRoute.controls.accessibilityID)
+            HStack(spacing: 12) {
+                Button("Display…") { showDisplay = true }
+                    .accessibilityIdentifier("controls.display")
+                    .popover(isPresented: Binding(get: { showDisplay }, set: { shown in
+                        showDisplay = shown
+                        model.setDisplayPopover(shown)
+                    }), arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Map detail").font(.headline)
+                            Slider(value: Binding(get: { model.detailLevel }, set: { model.setDetail($0) }), in: 0...4, step: 1)
+                                .frame(width: 220)
+                                .accessibilityIdentifier("controls.detail")
+                                .accessibilityValue(model.detailName)
+                            Text(model.detailName).accessibilityIdentifier("controls.detail.name")
+                        }
+                        .padding(16)
+                        .onAppear { model.setDisplayPopover(true) }
+                        .onDisappear { model.setDisplayPopover(false) }
+                    }
+                Menu("Density: \(model.density.title)") {
+                    ForEach(LabModel.Density.allCases) { density in
+                        Button(density.title) { model.setDensity(density) }
+                    }
+                }
+                .fixedSize()
+                .accessibilityIdentifier("controls.density")
+                Button("Import…") { Task { _ = await model.chooseImportFolder() } }
+                    .accessibilityIdentifier("controls.import")
+                if let folder = model.importedFolder {
+                    Text("Imported \(folder)").foregroundStyle(.secondary).accessibilityIdentifier("controls.imported")
+                }
+            }
+            DisclosureGroup("Advanced", isExpanded: Binding(get: { model.advancedExpanded }, set: { model.setAdvanced($0) })) {
+                Toggle("Show hidden files", isOn: Binding(get: { model.showHidden }, set: { model.setShowHidden($0) }))
+                    .accessibilityIdentifier("controls.hidden")
+            }
+            .accessibilityIdentifier("controls.advanced")
+            Text("Cleanup queue").font(.headline)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(model.queue.enumerated()), id: \.element.id) { index, item in
+                    HStack {
+                        Toggle(item.name, isOn: Binding(get: { item.queued }, set: { _ in model.toggleQueue(item.name) }))
+                            .toggleStyle(.checkbox)
+                            .accessibilityIdentifier("queueCheckbox")
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file)).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(index == model.highlighted ? Color.accentColor.opacity(0.18) : .clear, in: .rect(cornerRadius: 5))
+                    .contentShape(.rect)
+                    .onHover { inside in model.setHovered(inside ? item.name : (model.hovered == item.name ? nil : model.hovered)) }
+                    // The row's identifier is copied onto its checkbox, as in the DiskUnbloat report.
+                    .accessibilityIdentifier("queueRow")
+                }
+            }
+            .frame(maxWidth: 360)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("cleanupQueue")
+            .focusable()
+            .focused($queueFocused)
+            .onKeyPress(.downArrow) { model.moveHighlight(1); return .handled }
+            .onKeyPress(.upArrow) { model.moveHighlight(-1); return .handled }
+            .onKeyPress(.space) { model.toggleQueue(model.queue[model.highlighted].name); return .handled }
+            if let hovered = model.hovered {
+                Text("\(hovered): \(model.queue.first { $0.name == hovered }.map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "")")
+                    .padding(6)
+                    .background(.thickMaterial, in: .rect(cornerRadius: 6))
+                    .accessibilityIdentifier("controls.hover-card")
+            }
+            Text("Map").font(.headline)
+            HStack(spacing: 6) {
+                ForEach(model.mapItems, id: \.self) { name in
+                    Text(name)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, CGFloat(4 + model.detailLevel * 2))
+                        .background(.quaternary, in: .rect(cornerRadius: 6))
+                        .accessibilityIdentifier("map.\(name)")
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("map")
+        }
+        .onAppear { queueFocused = true }
     }
 }
 

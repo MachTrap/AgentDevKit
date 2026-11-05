@@ -63,6 +63,14 @@ public final class TestingProfile {
         try data.write(to: try file(name), options: .atomic)
     }
 
+    /// A 0700 folder inside the profile for file-based fixtures, such as a generated home folder.
+    /// Pass it to `FileTree.materialize(in:)` from `AgentDevKitFixtures`.
+    public func fixtureDirectory(_ name: String) throws -> URL {
+        let url = try file(name)
+        try Self.secureDirectory(url)
+        return url
+    }
+
     private func file(_ name: String) throws -> URL {
         guard Self.validName(name), name != "lock" else { throw ProfileError.invalidName }
         return directory.appendingPathComponent(name)

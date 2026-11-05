@@ -1,0 +1,16 @@
+{
+  "name": "queue-map-seeded-failure",
+  "fixture": "basic-project-v1",
+  "route": "settings.controls",
+  "steps": [
+    {"note": "Seeds the stale-map bug on purpose: a queued folder stays on the map."},
+    {"action": "controls.seedMapBug", "args": {"enabled": true}},
+    {"burst": [
+      {"action": "queue.toggle", "args": {"names": ["Downloads"]}},
+      {"action": "queue.toggle", "args": {"names": ["Desktop"]}}
+    ]},
+    {"wait": "work.quiescent"},
+    {"assert": {"field": "queueCount", "equals": 2}},
+    {"assert": {"field": "queuedVisibleOnMap", "equals": []}}
+  ]
+}

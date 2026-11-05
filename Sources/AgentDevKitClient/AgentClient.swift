@@ -51,6 +51,17 @@ public struct AgentClient: Sendable {
         self.location = location
     }
 
+    /// The live session published by a process, looked up in the per-user directory and, with a bundle ID,
+    /// in that app's sandbox container.
+    public static func session(pid: Int32, bundleId: String? = nil) -> SessionIdentity? {
+        var locations: [SessionLocation] = [.local]
+        if let bundleId { locations.append(.appContainer(bundleId)) }
+        for location in locations {
+            if let match = (try? discover(location))?.first(where: { $0.identity.pid == pid }) { return match.identity }
+        }
+        return nil
+    }
+
     private static func matching(_ selector: String?, in all: [SessionDescriptor]) -> [SessionDescriptor] {
         guard let selector else { return all }
         return all.filter { $0.identity.sessionId == UUID(uuidString: selector) || $0.identity.bundleId == selector }
@@ -76,10 +87,20 @@ public struct AgentClient: Sendable {
         return response
     }
 
+    /// Sends a typed command. RATE_LIMITED replies are retried with backoff, because the host rejects them
+    /// before running anything; the retry reuses the request ID.
     public func call<Input, Output>(
         _ command: Command<Input, Output>, _ params: Input, timeoutMs: Int? = nil, requestId: UUID = UUID()
     ) async throws -> Response<Output> {
-        try await send(command.method, params, timeoutMs: timeoutMs, requestId: requestId)
+        var delay = 120
+        for attempt in 0..<6 {
+            do { return try await send(command.method, params, timeoutMs: timeoutMs, requestId: requestId) }
+            catch let failure as Failure where failure.code == .rateLimited && attempt < 5 {
+                try await Task.sleep(for: .milliseconds(delay))
+                delay = min(1_000, delay * 2)
+            }
+        }
+        return try await send(command.method, params, timeoutMs: timeoutMs, requestId: requestId)
     }
 
     private static var mismatch: Failure {
@@ -166,5 +187,53 @@ public struct AgentClient: Sendable {
         default:
             return Failure(.connectionLost, "The connection closed before the response arrived.", retryable: true)
         }
+    }
+}
+
+/// Where the CLI and MCP sidecar find the session to use when no `--session` is given:
+/// `AGENTDEVKIT_SESSION`, then a `.agentdevkit.json` project file (`{"session": "com.example.app.testing"}`)
+/// found by walking up from the current directory. An explicit selector always wins.
+public enum SessionDefaults {
+    public enum Source: String, Sendable { case flag, environment, projectFile }
+
+    public struct Resolved: Sendable, Equatable {
+        public let selector: String
+        public let source: Source
+        /// The project file the selector came from.
+        public let file: URL?
+    }
+
+    public static let environmentKey = "AGENTDEVKIT_SESSION"
+    public static let fileName = ".agentdevkit.json"
+
+    public static func resolve(
+        explicit: String?, environment: [String: String] = ProcessInfo.processInfo.environment,
+        directory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    ) throws -> Resolved? {
+        if let explicit, !explicit.isEmpty { return Resolved(selector: explicit, source: .flag, file: nil) }
+        if let value = environment[environmentKey]?.trimmingCharacters(in: .whitespaces), !value.isEmpty {
+            return Resolved(selector: value, source: .environment, file: nil)
+        }
+        guard let file = projectFile(from: directory) else { return nil }
+        struct Project: Decodable { let session: String? }
+        guard let data = try? Data(contentsOf: file), data.count <= 65_536,
+              let project = try? JSONDecoder().decode(Project.self, from: data) else {
+            throw Failure(.invalidParams, "\(file.path) is not a JSON object with a session string.", details: ["field": "session"])
+        }
+        guard let session = project.session?.trimmingCharacters(in: .whitespaces), !session.isEmpty else { return nil }
+        return Resolved(selector: session, source: .projectFile, file: file)
+    }
+
+    /// The nearest `.agentdevkit.json` in `directory` or an ancestor.
+    public static func projectFile(from directory: URL) -> URL? {
+        var current = directory.standardizedFileURL
+        for _ in 0..<64 {
+            let candidate = current.appendingPathComponent(fileName)
+            if FileManager.default.isReadableFile(atPath: candidate.path) { return candidate }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { return nil }
+            current = parent
+        }
+        return nil
     }
 }

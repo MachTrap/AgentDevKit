@@ -1,0 +1,26 @@
+{
+  "name": "queue-map",
+  "fixture": "basic-project-v1",
+  "route": "settings.controls",
+  "repeat": 5,
+  "invariants": "hold",
+  "steps": [
+    {"burst": [
+      {"action": "queue.toggle", "args": {"names": ["Downloads"]}},
+      {"action": "queue.toggle", "args": {"names": ["Desktop"]}},
+      {"action": "queue.toggle", "args": {"names": ["Downloads"]}}
+    ]},
+    {"wait": "work.quiescent"},
+    {"assert": {"field": "queueCount", "equals": 1}},
+    {"assert": {"field": "queued", "contains": "Desktop"}},
+    {"assert": {"field": "mapItems", "contains": "Downloads"}},
+    {"assert": {"field": "queuedVisibleOnMap", "equals": []}},
+    {"perform": "set", "role": "checkbox", "label": "Documents", "value": true},
+    {"wait": "queueCount=2"},
+    {"assert": {"element": {"id": "map.Documents"}, "exists": false}},
+    {"key": "Down Space"},
+    {"assert": {"field": "queued", "notContains": "Desktop"}},
+    {"action": "queue.toggle", "args": {"names": ["Documents"]}},
+    {"assert": {"field": "queueCount", "equals": 0}}
+  ]
+}

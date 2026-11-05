@@ -4,20 +4,20 @@ AgentDevKit gives coding agents a local, developer-only bridge into a running Sw
 
 The package and examples target macOS 14 and later. Use Swift 6 for the package and CLI. The loopback example requires Xcode 26 or later, and the MCP sidecar requires Swift 6.2.
 
-v0.3 speaks wire protocol `agentdevkit/2`. Build the app and tools from the same release. Coming from v0.2? See the [migration guide](MIGRATION.md).
+v0.3 and later speak wire protocol `agentdevkit/2`; v0.6 and v0.7 only add methods and optional fields. Build the app and tools from the same release. Upgrading? See the [migration guide](MIGRATION.md).
 
 ## Install the component you need
 
-The v0.5.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
+The v0.7.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
 
-- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.5.0](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
-- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.5.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.5.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
+- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.7.0](https://github.com/MachTrap/AgentDevKit/tree/v0.7.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
+- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.7.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.7.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
 - **CLI only.** Check out the tag and build the executable product. The root package has no external dependencies.
 - **MCP only.** Build the [separate MCP package](#build-the-mcp-sidecar) from the tag. It uses the client libraries directly.
 - **Examples.** Open the Xcode projects from the same tag and choose the Testing scheme described in the example's guide.
 
 ```sh
-git clone --branch v0.5.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
+git clone --branch v0.7.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
 cd AgentDevKit
 swift build -c release --product agentdevctl
 .build/release/agentdevctl --version
@@ -70,6 +70,20 @@ open -n "$PWD/.build/AgentLab/Build/Products/Debug/AgentLab-AgentTesting.app" \
 
 Testing profiles use isolated temporary storage. Pass `--agentdevkit-profile UUID` to reuse a profile after relaunch. Concurrent launches require distinct profiles.
 
+## Launch, select once, read one value
+
+```sh
+.build/debug/agentdevctl launch "$PWD/.build/AgentLab/Build/Products/Debug/AgentLab-AgentTesting.app" \
+  --mutations --replace --wait screen.ready
+export AGENTDEVKIT_SESSION=dev.agentdevkit.AgentTesting      # or a .agentdevkit.json file
+.build/debug/agentdevctl navigation open --route settings.controls
+.build/debug/agentdevctl state --field density                # raw value, exit 4 when absent
+.build/debug/agentdevctl wait --until 'density=regular'
+.build/debug/agentdevctl doctor --expect-id controls.density  # which startup stage failed, if any
+```
+
+A misspelled ID returns the closest valid name and a runnable example. Slow fixtures, scenarios and actions that open panels answer `accepted`; add `--wait` to follow them, or ask `operations status`.
+
 ## Track work and inspect changes
 
 ```sh
@@ -95,7 +109,18 @@ Apps that opt in with `AgentCatalog(ui: .all)` let agents look at their own wind
 .build/debug/agentdevctl --session SESSION_ID operations list
 ```
 
-The MCP sidecar returns captures as image content, so the model sees the UI directly. Captures approximate Liquid Glass; check controls with `ui tree`. To add a Testing target to an app, start with `agentdevctl scaffold --app NAME`.
+The default capture draws the main window plus every sheet, popover and alert above it; `ui surfaces` lists them. `ui tree --lint` finds identifiers SwiftUI copied onto children. Drive real controls with `ui set`, `ui choose`, `ui expand` and `ui press --path`, and send in-process input with `ui key`, `ui hover` and `ui scroll`. The MCP sidecar returns captures as image content, so the model sees the UI directly. Captures approximate Liquid Glass and popover chrome and report it; check controls with `ui tree`. To add a Testing target to an app, start with `agentdevctl scaffold --app NAME`.
+
+## Keep a bug fixed
+
+```sh
+.build/debug/agentdevctl recipe run Examples/AgentLab/recipes/queue-map.json      # bursts, waits, assertions; exit 4 on failure
+.build/debug/agentdevctl invariants                                               # app invariants checked on every change
+.build/debug/agentdevctl ui capture --baseline 'shots/controls-{locale}-{appearance}.png'
+.build/debug/agentdevctl audit-release .build/AgentLabRelease/Build/Products/Release/AgentLab.app
+```
+
+When an agent needs a person, `operator ask --question … --options Yes,No --wait` shows a labelled Testing-only panel in the app.
 
 ## Build the MCP sidecar
 
@@ -119,7 +144,7 @@ Run `bash scripts/verify-macos.sh` from a macOS desktop session to build the app
 To publish a release, merge to `main`, then tag that commit so the versioned links above and Xcode's **Exact Version** resolve:
 
 ```sh
-git tag -a v0.5.0 -m "AgentDevKit 0.5.0" && git push origin v0.5.0
+git tag -a v0.7.0 -m "AgentDevKit 0.7.0" && git push origin v0.7.0
 python3 scripts/check-version.py --release
 ```
 

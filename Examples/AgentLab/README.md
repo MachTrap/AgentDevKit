@@ -8,9 +8,13 @@ The Testing integration is three files: `AgentIntegration/LabAdapter.swift` (the
 
 Follow the [quick start](../../README.md#quick-start) from the repository root. Use the `AgentLab-AgentTesting` scheme for bridge sessions. The ordinary Debug and Release targets exclude the bridge. Testing fixtures use isolated storage. Pass `--agentdevkit-profile UUID` to reopen the same test profile.
 
+## Controls, recipes and invariants
+
+**Settings → Controls** is a disk-cleanup style screen for v0.6 and v0.7: a map-detail slider in a popover (`controls.display`, `controls.detail`), a SwiftUI menu (`controls.density`), a disclosure (`controls.advanced`), a cleanup queue whose rows deliberately copy `queueRow` onto their checkboxes (find it with `ui tree --lint`), a map of folders, arrow-key navigation, a hover card, and an Import… button that opens an open panel (`controls.import`, a `presentsUI` action). Testing-only extras: the `queue.toggle` and `controls.seedMapBug` actions, the `queue.mapConsistent` invariant, the `probe.stat` experiment, operator prompts, and the `slow-fixture-v1` (5 s) and `files-v1` (a generated home folder, `AgentDevKitFixtures`) fixtures. `recipes/queue-map.json` passes; `recipes/queue-map-seeded-failure.json` fails on purpose at its sixth step. `scripts/check-live-v07.py` exercises all of it.
+
 ## Sandboxed Testing
 
-Build from the [v0.5.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
+Build from the [v0.7.0 source tag](https://github.com/MachTrap/AgentDevKit/tree/v0.7.0) using the installation steps in the root README. Both schemes require `--enable-agentdevkit` on every launch. Add `--allow-agentdevkit-mutations` for fixture and route commands. The app starts read-only by default.
 
 To build and sign from a shell, choose the development identity and the team it belongs to. Set `lane=AppGroup` or `lane=Loopback`. This uses the same entitlements as the Xcode targets.
 

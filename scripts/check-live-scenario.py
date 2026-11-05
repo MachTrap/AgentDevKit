@@ -47,5 +47,5 @@ assert error["details"]["phase"] == "navigation"
 unchanged = run("state", "--scope", "current-screen")["result"]
 assert unchanged["revision"] > screen["revision"]
 assert {**unchanged, "revision": screen["revision"]} == screen
-assert run("state", "--scope", "app")["result"]["fields"] == {"projectCount": 1}
+assert run("state", "--scope", "app")["result"]["fields"]["projectCount"] == 1
 print("Live scenario passed: three fixture/route runs, Inspector readiness, scoped state and failed-scenario preflight.")

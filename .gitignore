@@ -32,3 +32,6 @@ __pycache__/
 
 #Other
 docs/
+
+# Recipe failure snapshots (agentdevctl recipe run)
+.agentdevkit/

@@ -31,6 +31,7 @@ final class TestingSession: NSObject, NSApplicationDelegate {
                 save: { try profile.write(JSONEncoder().encode($0), to: "workspace.json") }
             )
             self.profile = profile
+            adapter.fixtureHome = { try profile.fixtureDirectory("home") }
             // Seed only a fresh profile, so a reopened profile keeps its saved edits.
             if options.profile == nil, let fixture = options.fixture { try adapter.apply(Fixture.named(fixture)) }
         } catch {

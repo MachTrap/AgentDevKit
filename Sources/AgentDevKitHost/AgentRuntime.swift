@@ -20,6 +20,21 @@ public final class AgentRuntime {
     private var diagnostics: [DiagnosticRecord] = []
     private let diagnosticsCapacity: Int
     private var subscriptions: [UUID: AsyncStream<Void>.Continuation] = [:]
+    /// Outcomes of tracked operations, kept after their journal events scroll out.
+    private var tracked: [UUID: TrackedOutcome] = [:]
+    private var trackedOrder: [UUID] = []
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private(set) var presentingUI: Set<UUID> = []
+    var invariantEngine: InvariantEngine?
+    var operatorAnswers: [UUID: OperatorAnswer] = [:]
+    var operatorOrder: [UUID] = []
+
+    struct TrackedOutcome: Sendable {
+        let outcome: LifecycleEvent.Outcome
+        let code: String?
+        let reason: String?
+        let revision: UInt64
+    }
 
     public init(journalCapacity: Int = 500, diagnosticsCapacity: Int = 64) {
         journal = RevisionJournal(capacity: journalCapacity.clamped(16...10_000))
@@ -37,7 +52,73 @@ public final class AgentRuntime {
     /// Wakes pending waits after app state changed without a journal event.
     public func notifyChange() {
         for subscription in subscriptions.values { subscription.yield(()) }
+        invariantEngine?.schedule(self)
     }
+
+    // MARK: Tracked operations
+
+    /// The longest a tracked body may run before its context deadline elapses.
+    public static let trackedCeiling: Duration = .seconds(1_800)
+
+    /// Runs `body` as a tracked operation owned by the runtime and returns `.accepted` at once.
+    /// A `work` span named `name` opens now and closes with the body's outcome: completed, failed or cancelled.
+    /// Wait for it with `operation.completed`; `operations.status` reports the outcome and failure reason.
+    /// Set `presentsUI` when the body shows a panel, sheet or alert, so `operations.list` reports `awaitingUser`.
+    @discardableResult
+    public func track(
+        _ name: String, scope: String, id: UUID = UUID(), parentId: UUID? = nil, correlationId: UUID? = nil,
+        presentsUI: Bool = false, body: @escaping @MainActor () async throws -> Void
+    ) -> ActionOutcome {
+        let token = begin(.work, name: name, scope: scope, id: id, parentId: parentId, correlationId: correlationId)
+        guard token != nil else {
+            // The span could not open (bad name or ID, or the open-span limit); still run the work, but untracked.
+            Task { try? await body() }
+            return .completed
+        }
+        if presentsUI { presentingUI.insert(id) }
+        tasks[id] = Task { [weak self] in
+            var outcome = LifecycleEvent.Outcome.completed
+            var failure: Failure?
+            do { try await body() } catch {
+                let cancelled = Task.isCancelled || error is CancellationError || (error as? Failure)?.code == .cancelled
+                outcome = cancelled ? .cancelled : .failed
+                failure = error as? Failure ?? Failure(cancelled ? .cancelled : .internalError,
+                                                       cancelled ? "Operation cancelled." : "Operation failed.")
+            }
+            self?.finishTracked(id, token: token, outcome: outcome, failure: failure)
+        }
+        return .accepted(operationId: id)
+    }
+
+    /// Cancels a tracked operation started with `track`. Returns false when none is running with this ID.
+    @discardableResult
+    public func cancelTracked(_ id: UUID) -> Bool {
+        guard let task = tasks[id] else { return false }
+        task.cancel()
+        return true
+    }
+
+    private func finishTracked(_ id: UUID, token: LifecycleToken?, outcome: LifecycleEvent.Outcome, failure: Failure?) {
+        tasks[id] = nil
+        presentingUI.remove(id)
+        end(token, outcome: outcome)
+        remember(id, TrackedOutcome(outcome: outcome, code: failure?.code.rawValue, reason: failure.map { String($0.message.prefix(256)) },
+                                    revision: revision))
+    }
+
+    private func remember(_ id: UUID, _ outcome: TrackedOutcome) {
+        if tracked[id] == nil {
+            trackedOrder.append(id)
+            if trackedOrder.count > 256 { tracked[trackedOrder.removeFirst()] = nil }
+        }
+        tracked[id] = outcome
+        notifyChange()
+    }
+
+    func trackedOutcome(_ id: UUID) -> TrackedOutcome? { tracked[id] }
+
+    /// Whether a modal panel, sheet, alert or operator question is on screen.
+    var awaitingUser: Bool { UIInspection.modalSurfaceVisible() }
 
     // MARK: Lifecycle spans
 
@@ -88,12 +169,14 @@ public final class AgentRuntime {
     /// Open spans with their age and progress, oldest first.
     public func operations() -> [OperationInfo] {
         let now = ContinuousClock.now
+        let awaiting = presentingUI.isEmpty ? false : awaitingUser
         return journal.openSpans.map { span in
             let age = span.started.duration(to: now).components
             return OperationInfo(id: span.id, kind: span.kind, name: span.name, scope: span.scope, parentId: span.parentId,
                                  correlationId: span.correlationId,
                                  ageMs: Int(age.seconds * 1_000 + age.attoseconds / 1_000_000_000_000_000),
-                                 completed: progress[span.id]?.completed, total: progress[span.id]?.total)
+                                 completed: progress[span.id]?.completed, total: progress[span.id]?.total,
+                                 awaitingUser: presentingUI.contains(span.id) ? awaiting : nil)
         }
     }
 
@@ -136,6 +219,21 @@ public final class AgentRuntime {
             end(token, outcome: cancelled ? .cancelled : .failed)
             throw error
         }
+    }
+
+    // MARK: Operator answers
+
+    func recordQuestion(_ id: UUID, question: String) {
+        operatorOrder.append(id)
+        if operatorOrder.count > 64 { operatorAnswers[operatorOrder.removeFirst()] = nil }
+        operatorAnswers[id] = OperatorAnswer(operationId: id, status: .pending, question: question, answer: nil, notes: nil, revision: revision)
+    }
+
+    func recordAnswer(_ id: UUID, answer: String?, notes: String?) {
+        guard let asked = operatorAnswers[id] else { return }
+        operatorAnswers[id] = OperatorAnswer(operationId: id, status: answer == nil ? .unanswered : .answered, question: asked.question,
+                                             answer: answer, notes: notes, revision: revision)
+        notifyChange()
     }
 
     // MARK: Diagnostics

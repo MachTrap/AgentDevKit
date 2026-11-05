@@ -46,6 +46,12 @@ enum LabEvents {
             case .themeSaved, .appearanceEdited: ["theme", "accent", "appearanceDirty"]
             case .projectCreated: ["projectCount"]
             case .projectUpdated: ["projectName"]
+            case .controlChanged: ["detailLevel", "density", "advancedExpanded", "showHidden"]
+            case .queueChanged: ["queued", "mapItems", "queuedVisibleOnMap"]
+            case .highlightChanged: ["highlighted"]
+            case .hoverChanged: ["hovered"]
+            case .popoverChanged: ["displayPopoverShown"]
+            case .importFinished: ["importedFolder"]
             default: []
             }
             runtime.record(change.rawValue, scope: scope, correlationId: requestId, changedFields: fields)

@@ -147,6 +147,8 @@ public struct Failure: Error, Codable, Sendable, Equatable {
         public static let frameTooLarge = Code("FRAME_TOO_LARGE")
         public static let responseTooLarge = Code("RESPONSE_TOO_LARGE")
         public static let rateLimited = Code("RATE_LIMITED")
+        /// More than one UI element matched a locator. `details.paths` lists the candidates.
+        public static let ambiguousElement = Code("AMBIGUOUS_ELEMENT")
         public static let internalError = Code("INTERNAL_ERROR")
     }
 
@@ -250,6 +252,12 @@ public struct Capabilities: Codable, Sendable, Equatable {
     public let ui: [String]?
     public let readOnly: Bool
     public let limits: Limits
+    /// Optional protocol features this host serves, for feature detection. Absent before v0.6.
+    public let features: [String]?
+    /// Registered app invariants. Absent before v0.6 or when none.
+    public let invariants: [String]?
+    /// Registered investigation probes. Absent before v0.6 or when none.
+    public let experiments: [ExperimentCapability]?
 
     /// The limits in effect for this session.
     public struct Limits: Codable, Sendable, Equatable {
@@ -287,6 +295,19 @@ public struct Capabilities: Codable, Sendable, Equatable {
         }
     }
 
+    /// An investigation probe registered with `AgentExperiment`.
+    public struct ExperimentCapability: Codable, Sendable, Equatable {
+        public let id: String
+        public let inputSchema: JSONValue
+        public let readOnly: Bool
+
+        public init(id: String, inputSchema: JSONValue, readOnly: Bool) {
+            self.id = id
+            self.inputSchema = inputSchema
+            self.readOnly = readOnly
+        }
+    }
+
     public struct ConditionCapability: Codable, Sendable, Equatable {
         public let id: String
         /// JSON Schema subset describing the accepted `arguments` object.
@@ -302,8 +323,12 @@ public struct Capabilities: Codable, Sendable, Equatable {
         app: SessionIdentity, methods: [String], readOnly: Bool,
         routes: [RouteCapability] = [], fixtures: [String] = [], scopes: [String] = [], actions: [String] = [],
         conditions: [ConditionCapability] = [], lifecycle: [LifecycleCapability] = [], diagnosticCategories: [String] = [],
-        fixtureArguments: [String: JSONValue] = [:], ui: [String] = [], limits: Limits
+        fixtureArguments: [String: JSONValue] = [:], ui: [String] = [], limits: Limits,
+        features: [String] = [], invariants: [String] = [], experiments: [ExperimentCapability] = []
     ) {
+        self.features = features.isEmpty ? nil : features.sorted()
+        self.invariants = invariants.isEmpty ? nil : invariants
+        self.experiments = experiments.isEmpty ? nil : experiments
         self.fixtureArguments = fixtureArguments.isEmpty ? nil : fixtureArguments
         self.ui = ui.isEmpty ? nil : ui
         self.protocolVersion = Wire.version

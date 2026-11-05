@@ -30,8 +30,13 @@ private struct Endpoint: Sendable {
 
 private let sessionField: Value = [
     "type": "string",
-    "description": "Session UUID or bundle ID from agentdevkit_session. Required when more than one session is live."
+    "description": "Session UUID or bundle ID from agentdevkit_session. Defaults to AGENTDEVKIT_SESSION, then the nearest .agentdevkit.json. Required when more than one session is live and no default is set."
 ]
+
+/// An explicit sessionId wins; otherwise the environment or project-file default.
+private func selector(_ explicit: String?) -> String? {
+    (try? SessionDefaults.resolve(explicit: explicit))?.selector ?? explicit
+}
 private let timeoutField: Value = [
     "type": "integer", "minimum": 1, "maximum": .int(Wire.timeoutCeilingMs),
     "description": "Request deadline in milliseconds, up to the session's limits.maxTimeoutMs."
@@ -43,10 +48,12 @@ private func schema(_ kind: AgentOperation.Kind) -> Value {
     case .uuid: ["type": "string", "format": "uuid"]
     case .integer(let minimum, let maximum):
         maximum.map { ["type": "integer", "minimum": .int(minimum), "maximum": .int($0)] } ?? ["type": "integer", "minimum": .int(minimum)]
+    case .number: ["type": "number"]
     case .boolean: ["type": "boolean"]
     case .object: ["type": "object"]
     case .json: [:]
     case .oneOf(let values): ["type": "string", "enum": .array(values.map(Value.string))]
+    case .stringList: ["type": "array", "items": ["type": "string"]]
     }
 }
 
@@ -88,8 +95,8 @@ private let endpoints: [Endpoint] = [
         guard let selector else { return try result(SessionList(ok: true, result: AgentClient.sessions(at: location))) }
         return try result(await AgentClient(session: selector, at: location).hello())
     },
-    Endpoint(tool: tool("capabilities", "Discover the selected session's methods, routes with context schemas, fixtures, scopes, actions, wait conditions, lifecycle names and limits.")) { selector, _, timeoutMs in
-        try result(await AgentClient(session: selector, at: location).capabilities(timeoutMs: timeoutMs))
+    Endpoint(tool: tool("capabilities", "Discover the selected session's methods, features, routes with context schemas, fixtures, scopes, actions, wait conditions, invariants, experiments, lifecycle names and limits.")) { explicit, _, timeoutMs in
+        try result(await AgentClient(session: selector(explicit), at: location).capabilities(timeoutMs: timeoutMs))
     }
 ] + AgentOperation.all.map { operation in
     let exposed = operation.fields.filter(\.mcp)
@@ -100,20 +107,36 @@ private let endpoints: [Endpoint] = [
     }, uniquingKeysWith: { first, _ in first })
     let required = exposed.filter { $0.required && $0.defaultValue == nil }.map(\.name)
     return Endpoint(tool: tool(operation.tool, operation.summary, fields: fields, required: required,
-                               mutating: operation.mutating, destructive: operation.destructive)) { selector, arguments, timeoutMs in
+                               mutating: operation.mutating, destructive: operation.destructive)) { explicit, arguments, timeoutMs in
         guard Set(arguments.keys).isSubset(of: Set(exposed.map(\.name))) else {
             throw Failure(.invalidParams, "Tool arguments do not match the schema.")
         }
-        let client = try AgentClient(session: selector, at: location)
-        let response = try await operation.run(client, arguments, timeoutMs: timeoutMs)
-        guard operation.image, case .object(var envelope) = response, case .object(var payload)? = envelope["result"],
-              let data = payload["data"]?.stringValue else {
+        var arguments = arguments
+        let fields = arguments.removeValue(forKey: "fields")?.arrayValue?.compactMap(\.stringValue)
+        let client = try AgentClient(session: selector(explicit), at: location)
+        var response = try await operation.run(client, arguments, timeoutMs: timeoutMs)
+        if let fields, case .object(var envelope) = response {
+            let projection = operation.select(fields, in: response)
+            envelope["result"] = projection.object
+            if !projection.missing.isEmpty { envelope["missingFields"] = .array(projection.missing.map(JSONValue.string)) }
+            response = .object(envelope)
+        }
+        guard operation.image, case .object(var envelope) = response, case .object(let payload)? = envelope["result"],
+              case .object(var picture)? = operation.imagePath.reduce(Optional(JSONValue.object(payload)), { $0?.objectValue?[$1] }),
+              let data = picture["data"]?.stringValue else {
             return try result(response)
         }
         // Return the picture as image content, and the metadata without the base64 copy.
-        payload["data"] = nil
-        envelope["result"] = .object(payload)
-        let mimeType = payload["format"]?.stringValue == "jpeg" ? "image/jpeg" : "image/png"
+        picture["data"] = nil
+        var updated = JSONValue.object(payload)
+        func replace(_ root: JSONValue, _ path: ArraySlice<String>) -> JSONValue {
+            guard let head = path.first, case .object(var object) = root else { return .object(picture) }
+            object[head] = replace(object[head] ?? [:], path.dropFirst())
+            return .object(object)
+        }
+        updated = replace(updated, operation.imagePath[...])
+        envelope["result"] = updated
+        let mimeType = picture["format"]?.stringValue == "jpeg" ? "image/jpeg" : "image/png"
         return try result(JSONValue.object(envelope), image: (data, mimeType))
     }
 }

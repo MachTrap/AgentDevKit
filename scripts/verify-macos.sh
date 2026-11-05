@@ -15,6 +15,7 @@ run_swift() {
 }
 run_swift test
 run_swift build -c release --product agentdevctl
+run_swift build -c release --product agentdevkit-desktop
 python3 scripts/check-version.py --cli .build/release/agentdevctl
 run_swift build --package-path Tools/MCP --force-resolved-versions -c release --product agentdevkit-mcp
 
@@ -46,3 +47,13 @@ python3 scripts/check-release.py \
   --testing "$root/testing/Build/Products/Debug/AgentLab-AgentTesting.app" \
   --link-map "$root/release/Build/Intermediates.noindex/AgentLab.build/Release/AgentLab.build/AgentLab-LinkMap-normal-$(uname -m).txt" \
   --settings "$root/release/settings.json"
+
+# The shipping build carries no AgentDevKit symbols, libraries or session; the Testing build must fail the same audit.
+.build/release/agentdevctl audit-release "$root/release/Build/Products/Release/AgentLab.app"
+if .build/release/agentdevctl audit-release "$root/testing/Build/Products/Debug/AgentLab-AgentTesting.app" --no-launch \
+  > "$root/release/audit-testing.log" 2>&1; then
+  cat "$root/release/audit-testing.log"
+  echo "error: audit-release passed a Testing build." >&2
+  exit 1
+fi
+grep -F "symbols contain AgentDevKit" "$root/release/audit-testing.log"

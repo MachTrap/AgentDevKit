@@ -92,19 +92,26 @@ public struct FixtureState: Codable, Sendable {
     public let revision: UInt64
     /// App-defined summary of the loaded data, such as the selected entity IDs.
     public let fields: [String: JSONValue]
-    public init(fixture: String, revision: UInt64, fields: [String: JSONValue] = [:]) {
+    /// Set when the load outlasted the request deadline and the response status is `accepted`. The load keeps
+    /// running; wait with `operation.completed` and read the result with `operations.status`. Absent before v0.6.
+    public let operationId: UUID?
+    public init(fixture: String, revision: UInt64, fields: [String: JSONValue] = [:], operationId: UUID? = nil) {
         self.fixture = fixture
         self.revision = revision
         self.fields = fields
+        self.operationId = operationId
     }
 }
 
 public struct ScenarioState: Codable, Sendable {
     public let fixture: FixtureState
     public let screen: ScreenState
-    public init(fixture: FixtureState, screen: ScreenState) {
+    /// Set when preparation outlasted the request deadline and keeps running. Absent before v0.6.
+    public let operationId: UUID?
+    public init(fixture: FixtureState, screen: ScreenState, operationId: UUID? = nil) {
         self.fixture = fixture
         self.screen = screen
+        self.operationId = operationId
     }
 }
 
