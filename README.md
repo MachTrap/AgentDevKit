@@ -116,6 +116,13 @@ Use the absolute path to `agentdevkit-mcp` in your MCP client's stdio server con
 
 Run `bash scripts/verify-macos.sh` from a macOS desktop session to build the apps, check Release linkage, and probe both builds at runtime. GitHub Actions uses the same entry point.
 
+To publish a release, merge to `main`, then tag that commit so the versioned links above and Xcode's **Exact Version** resolve:
+
+```sh
+git tag -a v0.5.0 -m "AgentDevKit 0.5.0" && git push origin v0.5.0
+python3 scripts/check-version.py --release
+```
+
 | Path | Contents |
 | --- | --- |
 | `Sources/` | Swift framework modules and `agentdevctl` |
