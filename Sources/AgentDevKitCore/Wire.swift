@@ -246,6 +246,8 @@ public struct Capabilities: Codable, Sendable, Equatable {
     public let conditions: [ConditionCapability]
     public let lifecycle: [LifecycleCapability]
     public let diagnosticCategories: [String]
+    /// In-process UI tools this session serves: `capture`, `tree`, `press`. Absent before v0.5 or when none.
+    public let ui: [String]?
     public let readOnly: Bool
     public let limits: Limits
 
@@ -300,9 +302,10 @@ public struct Capabilities: Codable, Sendable, Equatable {
         app: SessionIdentity, methods: [String], readOnly: Bool,
         routes: [RouteCapability] = [], fixtures: [String] = [], scopes: [String] = [], actions: [String] = [],
         conditions: [ConditionCapability] = [], lifecycle: [LifecycleCapability] = [], diagnosticCategories: [String] = [],
-        fixtureArguments: [String: JSONValue] = [:], limits: Limits
+        fixtureArguments: [String: JSONValue] = [:], ui: [String] = [], limits: Limits
     ) {
         self.fixtureArguments = fixtureArguments.isEmpty ? nil : fixtureArguments
+        self.ui = ui.isEmpty ? nil : ui
         self.protocolVersion = Wire.version
         self.libraryVersion = AgentDevKitVersion.current
         self.app = app

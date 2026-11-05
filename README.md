@@ -8,16 +8,16 @@ v0.3 speaks wire protocol `agentdevkit/2`. Build the app and tools from the same
 
 ## Install the component you need
 
-The v0.4.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
+The v0.5.0 release is distributed as source. Use Swift 6 for the package and CLI, and Swift 6.2 for the MCP sidecar.
 
-- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.4.0](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
-- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.4.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
+- **Skill only.** Ask your skill installer to install the [macos-agent-native directory at v0.5.0](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0/.agents/skills/macos-agent-native), or copy that directory into your agent's skills directory. Keep its `references/` alongside `SKILL.md`.
+- **App integration.** Add `https://github.com/MachTrap/AgentDevKit.git` in Xcode with **Exact Version 0.5.0**. Link `AgentDevKitHost` and `AgentDevKitCore` only in a dedicated Testing target with a separate bundle ID and data store. Implement one `AgentAdapter`, declare an `AgentCatalog`, and start an `AgentSession`. The library serves every protocol method. Follow the [integration guide](https://github.com/MachTrap/AgentDevKit/blob/v0.5.0/.agents/skills/macos-agent-native/references/INTEGRATION.md).
 - **CLI only.** Check out the tag and build the executable product. The root package has no external dependencies.
 - **MCP only.** Build the [separate MCP package](#build-the-mcp-sidecar) from the tag. It uses the client libraries directly.
 - **Examples.** Open the Xcode projects from the same tag and choose the Testing scheme described in the example's guide.
 
 ```sh
-git clone --branch v0.4.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
+git clone --branch v0.5.0 --depth 1 https://github.com/MachTrap/AgentDevKit.git
 cd AgentDevKit
 swift build -c release --product agentdevctl
 .build/release/agentdevctl --version
@@ -84,6 +84,19 @@ Start with the revision from a state snapshot. `observe` returns fresh scoped st
 
 Register lifecycle names alongside each new feature. The bridge can then correlate screen open and close, work start and finish, and scenario start and finish with the same events you already read in `observe`.
 
+## See the window
+
+Apps that opt in with `AgentCatalog(ui: .all)` let agents look at their own windows, with no Screen Recording or Accessibility permission:
+
+```sh
+.build/debug/agentdevctl --session SESSION_ID ui capture --out window.png
+.build/debug/agentdevctl --session SESSION_ID ui tree --only-identified
+.build/debug/agentdevctl --session SESSION_ID ui press --id button.send
+.build/debug/agentdevctl --session SESSION_ID operations list
+```
+
+The MCP sidecar returns captures as image content, so the model sees the UI directly. Captures approximate Liquid Glass; check controls with `ui tree`. To add a Testing target to an app, start with `agentdevctl scaffold --app NAME`.
+
 ## Build the MCP sidecar
 
 ```sh
@@ -102,6 +115,13 @@ Use the absolute path to `agentdevkit-mcp` in your MCP client's stdio server con
 ## Verification
 
 Run `bash scripts/verify-macos.sh` from a macOS desktop session to build the apps, check Release linkage, and probe both builds at runtime. GitHub Actions uses the same entry point.
+
+To publish a release, merge to `main`, then tag that commit so the versioned links above and Xcode's **Exact Version** resolve:
+
+```sh
+git tag -a v0.5.0 -m "AgentDevKit 0.5.0" && git push origin v0.5.0
+python3 scripts/check-version.py --release
+```
 
 | Path | Contents |
 | --- | --- |

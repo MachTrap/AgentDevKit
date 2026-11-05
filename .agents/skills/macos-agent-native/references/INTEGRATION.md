@@ -2,9 +2,11 @@
 
 ## Target and lifecycle
 
+Start with `agentdevctl scaffold --app NAME --bundle-id ID`. It writes `NAMETesting/TestingSession.swift`, an adapter skeleton, Testing entitlements and a Debug-only guard script, then prints the exact Xcode steps. It never edits the project file. The steps below explain what each piece does.
+
 1. Find the Xcode target, composition root, router, data store and existing tests. Pick one screen and the real service or coordinator that already owns it.
 2. Add a Testing app target with its own bundle ID and store.
-   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.4.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0).
+   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.5.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.5.0).
    - Keep the bridge source and package products out of the normal Debug and Release targets.
    - Preserve the shipping app's entitlements.
 3. Start the bridge from a Testing-only composition root:
@@ -83,6 +85,28 @@ Declare everything in one `AgentCatalog`. The host builds both its method table 
 
 Read-only sessions hide routes, fixtures, actions and scenario lifecycle entries. They answer mutating methods with `PERMISSION_DENIED`. `Examples/AgentLab/AgentIntegration/LabAdapter.swift` is a complete mutation-enabled adapter.
 
+## UI inspection
+
+Set `AgentCatalog(ui: .all)` to let agents look at the app's own windows, with no Screen Recording or Accessibility permission:
+
+- `ui.capture` renders a window to PNG or JPEG. It draws Liquid Glass sidebars and list rows, and composites sheets over their parent. SwiftUI glass shapes (`.glassEffect`, glass button styles) draw without their glass fill.
+- `ui.tree` returns the system accessibility tree, as VoiceOver and XCUITest see it, with secrets redacted and secure fields' values omitted.
+- `ui.press` performs the accessibility press on an identified element. It is a mutation, so read-only sessions never serve it.
+
+Captures show whatever the window shows, so enable them only in the Testing target, and keep secrets out of visible text where you can. Override `window(for:)` when the app has several windows.
+
+In SwiftUI, `.accessibilityIdentifier` on a container copies the identifier onto every child and replaces the children's own identifiers. Give containers `.accessibilityElement(children: .contain)` before their identifier, as in:
+
+```swift
+VStack { … }.accessibilityElement(children: .contain).accessibilityIdentifier("pane.response")
+```
+
+## Async storage and progress
+
+`loadFixture(_:arguments:context:)` may be `async`, for apps whose storage is an actor; a synchronous implementation still satisfies it. Wait for in-flight writes from the old data before replacing it, and make sure a replaced store can no longer save.
+
+For long work with countable steps, call `runtime.progress(id:completed:total:)` on its open span. Agents read open spans, their age and progress with `operations.list`.
+
 ## Lifecycle events
 
 For each feature, agree on these during implementation: route and context, readiness, accessibility IDs, scoped state, and finite work names.
@@ -107,7 +131,7 @@ Use static names, the presentation ID as the work span ID, and the scenario ID a
   - `LoopbackPairing` stores only a security-scoped bookmark and holds the folder's scope until the session stops.
   - Bind `session.pair()` and `session.forgetPairing()` to Testing-only controls.
 
-See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
+See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.5.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
 
 ## Verify the integration
 

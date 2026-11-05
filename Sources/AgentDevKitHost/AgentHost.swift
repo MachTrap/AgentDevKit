@@ -43,6 +43,7 @@ public actor AgentHost {
         // Built from the full catalog so a read-only session answers mutating methods with PERMISSION_DENIED.
         let builtins = Builtins.commands(adapter: adapter, runtime: runtime, catalog: catalog, allowMutations: allowMutations,
                                          waitMargin: .milliseconds(limits.waitMarginMs))
+            + UIInspection.commands(adapter: adapter, runtime: runtime, access: catalog.ui, maxResponseBytes: limits.maxResponseBytes)
         self.init(visible: visible, commands: builtins + catalog.commands, allowMutations: allowMutations,
                   configuration: configuration, conditions: Builtins.builtinConditions)
     }
@@ -406,6 +407,7 @@ public actor AgentHost {
             actions: catalog.actions.map(\.id), conditions: conditions, lifecycle: catalog.lifecycle,
             diagnosticCategories: catalog.diagnosticCategories,
             fixtureArguments: catalog.fixtureArguments.mapValues(\.json),
+            ui: catalog.ui.names,
             limits: .init(maxResponseBytes: limits.maxResponseBytes, maxRequestBytes: limits.maxRequestBytes,
                           maxTimeoutMs: limits.maxTimeoutMs, maxConcurrentConnections: limits.maxConnections,
                           requestsPerSecond: limits.requestsPerSecond)

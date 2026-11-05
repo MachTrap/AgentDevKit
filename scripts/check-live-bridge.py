@@ -48,9 +48,11 @@ assert capabilities["app"] == identity
 assert capabilities["readOnly"]
 assert set(capabilities["methods"]) == {
     "system.hello", "system.capabilities", "state.snapshot", "state.observe", "actions.list",
-    "diagnostics.recent", "events.since", "runtime.wait",
+    "diagnostics.recent", "events.since", "runtime.wait", "operations.list", "ui.capture", "ui.tree",
 }
 assert capabilities["fixtures"] == [] and capabilities["routes"] == [] and capabilities["actions"] == []
+# A read-only session reads its windows but never presses.
+assert capabilities["ui"] == ["capture", "tree"]
 
 if args.app_group:
     directory = Path.home() / "Library" / "Group Containers" / args.app_group / "a" / session_id.replace("-", "")[:16]

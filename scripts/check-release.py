@@ -65,7 +65,7 @@ for architecture in architectures:
 
 for evidence in [symbols, libraries, *link_maps, release.read_bytes().decode("latin1")]:
     assert not re.search(
-        r"AgentDevKit(?:Core|Host|Transport|Client)|AgentRuntime|AgentSession|LoopbackPairing|TestingProfile|"
+        r"AgentDevKit(?:Core|Host|Transport|Client)|AgentRuntime|AgentSession|LoopbackPairing|TestingProfile|UIInspection|AccessibilityClient|"
         r"LaunchOptions|LabAdapter|LabEvents|TestingSession|agentdevkit-legacy-overflow|enable-agentdevkit|"
         r"allow-agentdevkit-mutations|agentdevkit-profile|agentdevkit-fixture|long-node-names-v1",
         evidence,

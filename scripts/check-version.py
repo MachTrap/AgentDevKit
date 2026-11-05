@@ -10,6 +10,8 @@ if not __debug__:
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--cli", help="Built agentdevctl to compare with --version.")
+parser.add_argument("--release", action="store_true",
+                    help="Also require the vX.Y.Z tag on origin, so versioned doc links and Exact Version resolve.")
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 
@@ -35,6 +37,12 @@ if args.cli:
     built = subprocess.check_output([args.cli, "--version"], text=True).strip()
     if built != version:
         problems.append(f"{args.cli} reports {built}")
+
+if args.release:
+    tags = subprocess.run(["git", "-C", str(root), "ls-remote", "--tags", "origin", f"refs/tags/v{version}"],
+                          capture_output=True, text=True)
+    if tags.returncode != 0 or not tags.stdout.strip():
+        problems.append(f"tag v{version} is not on origin; docs link to it and Xcode resolves Exact Version from it")
 
 assert not problems, f"Version {version} mismatches: " + "; ".join(problems)
 print(f"Version {version} is consistent.")

@@ -44,6 +44,9 @@ enum Builtins {
             ])) { input, _ in
                 try runtime.recentDiagnostics(input, categories: catalog.diagnosticCategories).map(engine.redact)
             },
+            AppCommand(OperationCommands.list, parameters: .empty) { _, _ in
+                runtime.operations()
+            },
             AppCommand(AppCommands.actions, parameters: .empty) { _, _ in
                 // Actions are mutations, so a read-only session lists none.
                 (allowMutations ? catalog.actions : []).map { action in
@@ -76,7 +79,7 @@ enum Builtins {
         if !catalog.fixtures.isEmpty {
             commands.append(AppCommand(AppCommands.load, parameters: ObjectSchema(["fixture": .string(maxLength: 128), "arguments": .value],
                                                                                  required: ["fixture"])) { input, context in
-                try engine.load(input.fixture, arguments: input.arguments, context: context)
+                try await engine.load(input.fixture, arguments: input.arguments, context: context)
             })
         }
         if !catalog.routes.isEmpty, !catalog.fixtures.isEmpty {
@@ -190,7 +193,7 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
         return page.events.contains { $0.lifecycle?.kind == .screen && $0.lifecycle?.phase == .began }
     }
 
-    func load(_ id: String, arguments: [String: JSONValue]? = nil, context: CommandContext) throws -> FixtureState {
+    func load(_ id: String, arguments: [String: JSONValue]? = nil, context: CommandContext) async throws -> FixtureState {
         guard catalog.fixtures.contains(id) else {
             throw Failure(.fixtureNotFound, "Fixture is not registered.", details: ["field": "fixture"])
         }
@@ -201,7 +204,7 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
             throw Failure(.invalidParams, "This fixture accepts no arguments.", details: ["field": .string("arguments." + extra)])
         }
         try context.checkDeadline()
-        let fields = try adapter.loadFixture(id, arguments: arguments, context: context)
+        let fields = try await adapter.loadFixture(id, arguments: arguments, context: context)
         return FixtureState(fixture: id, revision: runtime.revision, fields: redact(fields))
     }
 
@@ -218,7 +221,7 @@ private final class Engine<Adapter: AgentAdapter>: Sendable {
             do { destination = try resolve(route: input.route, context: input.context, fixture: input.fixture) }
             catch { throw Self.phase(error, "navigation") }
             let fixture: FixtureState
-            do { fixture = try load(input.fixture, arguments: input.fixtureArguments, context: context) }
+            do { fixture = try await load(input.fixture, arguments: input.fixtureArguments, context: context) }
             catch { throw Self.phase(error, "fixture") }
             do {
                 let screen = try await open(destination, wait: input.waitForReady ?? true, context: context, scenarioId: span?.id)

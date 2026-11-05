@@ -157,6 +157,14 @@ extension JSONValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, Ex
     public var stringValue: String? { if case .string(let value) = self { value } else { nil } }
     public var integerValue: Int64? { if case .integer(let value) = self { value } else { nil } }
     public var boolValue: Bool? { if case .bool(let value) = self { value } else { nil } }
+    /// A number of either JSON kind.
+    public var doubleValue: Double? {
+        switch self {
+        case .number(let value): value
+        case .integer(let value): Double(value)
+        default: nil
+        }
+    }
     public var objectValue: [String: JSONValue]? { if case .object(let value) = self { value } else { nil } }
     public var arrayValue: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
 }

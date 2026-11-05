@@ -1,5 +1,19 @@
 # Migration guide
 
+## v0.4 to v0.5
+
+v0.5 comes from building Tern 2, a larger SwiftUI client with actor-based storage, Liquid Glass and streaming work. The wire protocol stays `agentdevkit/2`; v0.4 tools can talk to v0.5 apps for every v0.4 method.
+
+| Change | What to do |
+| --- | --- |
+| `ui.capture`, `ui.tree`, `ui.press` | Opt in with `AgentCatalog(ui: .all)` in the Testing target. Capabilities list them in `ui` |
+| `loadFixture(_:arguments:context:)` may be `async` | Nothing for synchronous adapters. Actor-backed stores can now await in fixtures |
+| `runtime.progress(id:completed:total:)` and `operations.list` | Report progress for long work; agents list open spans |
+| `AgentAdapter.window(for:)` | Override only for apps with several windows |
+| `agentdevctl scaffold` | Generates a Testing target's files and prints the Xcode steps |
+| Client waits up to one second past a deadline for the app's own `TIMEOUT` reply | No API change; timeout details (blockers, hints) survive a loaded machine |
+| SwiftUI container identifiers | Add `.accessibilityElement(children: .contain)` before a container's identifier so children keep theirs |
+
 ## v0.3 to v0.4
 
 v0.4 collects the fixes from adopting AgentDevKit in Tern, a separate sandboxed SwiftUI app. The wire protocol stays `agentdevkit/2`, and v0.3 and v0.4 tools and apps interoperate.

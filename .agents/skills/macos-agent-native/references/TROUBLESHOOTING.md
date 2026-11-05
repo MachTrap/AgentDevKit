@@ -11,4 +11,6 @@
 - **Navigation timeout with a `hint`.** The screen never reported its appearance for that presentation, even if the window looks right. Fix the app's appearance callback, for example `.onAppear` placed outside a changing `.id`, before retrying.
 - **Timeout.** Inspect the reported `blockers` array and recent diagnostics. A timed-out route may already have changed app state. Take a snapshot before retrying a mutation, or retry with the same request ID to receive the original response.
 - **`RESPONSE_TOO_LARGE` or `CONNECTION_LOST`.** Narrow the scope or page size. A lost connection may follow a committed mutation, so observe before retrying.
+- **A capture has blank or missing areas.** Glass refraction and SwiftUI glass shapes are approximated. Confirm the control exists with `ui tree`; use `ui tree --source views` to see which view class holds it.
+- **`ui tree` misses controls or shows one identifier on many elements.** A SwiftUI container identifier without `.accessibilityElement(children: .contain)` replaces its children's identifiers. Fix the container in the app.
 - **GUI or AX unavailable.** Run the existing build, unit, or bridge checks and identify which UI evidence remains unavailable. Use regular Xcode/XCUITest or an authorized accessibility tool when the host supports it.
