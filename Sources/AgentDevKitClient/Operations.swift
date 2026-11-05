@@ -94,9 +94,35 @@ public struct AgentOperation: Sendable {
         return params
     }
 
+    /// The longest wait the tools accept. Longer waits are split into requests within the session's limit.
+    public static let maxWaitMs = 120_000
+
     /// Sends the operation and returns the response envelope as JSON.
+    /// A `runtime.wait` longer than the session's `maxTimeoutMs` runs as consecutive waits,
+    /// so no single request holds a connection longer than the host allows.
     public func run(_ client: AgentClient, _ values: [String: JSONValue], timeoutMs: Int? = nil) async throws -> JSONValue {
-        try await send(client, params(values), timeoutMs)
+        var params = try params(values)
+        let limit = client.limits.maxTimeoutMs
+        guard method == AppCommands.wait.method, let total = timeoutMs, total > limit else {
+            return try await send(client, params, timeoutMs)
+        }
+        guard total <= Self.maxWaitMs else {
+            throw Failure(.invalidParams, "Waits are limited to \(Self.maxWaitMs) ms.", details: ["field": "timeoutMs"])
+        }
+        let failOnTimeout = params["failOnTimeout"]?.boolValue ?? true
+        params["failOnTimeout"] = false
+        let clock = ContinuousClock()
+        let deadline = clock.now + .milliseconds(total)
+        var last: JSONValue
+        repeat {
+            let remaining = clock.now.duration(to: deadline).components
+            let remainingMs = Int(remaining.seconds * 1_000 + remaining.attoseconds / 1_000_000_000_000_000)
+            last = try await send(client, params, min(limit, max(remainingMs, 250)))
+            if last.objectValue?["result"]?.objectValue?["satisfied"]?.boolValue == true { return last }
+        } while clock.now < deadline - .milliseconds(250)
+        guard failOnTimeout else { return last }
+        let blockers = last.objectValue?["result"]?.objectValue?["blockers"] ?? .array([])
+        throw Failure(.timeout, "Condition did not settle before the deadline.", retryable: true, details: ["blockers": blockers])
     }
 
     private static func insert(_ value: JSONValue, at path: ArraySlice<String>, into object: [String: JSONValue]) -> [String: JSONValue] {
@@ -153,14 +179,17 @@ extension AgentOperation {
         AgentOperation(
             tool: "prepare", command: ["scenario", "prepare"], AppCommands.prepare,
             summary: "Reset isolated Testing data to a named fixture and open a real app screen in one call. Waits for readiness by default. Use external UI checks to verify rendering or clickability.",
-            fields: [fixture, route, context, waitForReady], destructive: true
+            fields: [fixture, Field("fixtureArguments", kind: .object, flag: "--fixture-args",
+                                    summary: "Fixture arguments matching capabilities.fixtureArguments[fixture]."),
+                     route, context, waitForReady], destructive: true
         ) { result in
             "\(result.objectValue?["fixture"]?.objectValue?["fixture"]?.stringValue ?? "?") → \(screenLine(result.objectValue?["screen"]))"
         },
         AgentOperation(
             tool: "fixtures", command: ["fixtures", "load"], AppCommands.load,
             summary: "Replace isolated Testing data with a named fixture without navigating. Prefer prepare when a screen is also needed.",
-            fields: [fixture], destructive: true
+            fields: [fixture, Field("arguments", kind: .object, flag: "--fixture-args",
+                                    summary: "Fixture arguments matching capabilities.fixtureArguments[fixture].")], destructive: true
         ) { result in
             "Loaded \(result.objectValue?["fixture"]?.stringValue ?? "?")  revision \(result.objectValue?["revision"]?.integerValue ?? 0)"
         },

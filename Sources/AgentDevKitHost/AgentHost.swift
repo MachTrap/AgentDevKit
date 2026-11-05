@@ -405,6 +405,7 @@ public actor AgentHost {
             routes: catalog.routes.map(\.capability), fixtures: catalog.fixtures, scopes: catalog.scopes,
             actions: catalog.actions.map(\.id), conditions: conditions, lifecycle: catalog.lifecycle,
             diagnosticCategories: catalog.diagnosticCategories,
+            fixtureArguments: catalog.fixtureArguments.mapValues(\.json),
             limits: .init(maxResponseBytes: limits.maxResponseBytes, maxRequestBytes: limits.maxRequestBytes,
                           maxTimeoutMs: limits.maxTimeoutMs, maxConcurrentConnections: limits.maxConnections,
                           requestsPerSecond: limits.requestsPerSecond)

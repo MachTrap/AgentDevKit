@@ -16,7 +16,8 @@ final class ToyApp: AgentAdapter {
         let name: String
     }
 
-    static let fixtures = ["two-items-v1": ["a", "b"], "empty-v1": [String]()]
+    static let fixtures = ["two-items-v1": ["a", "b"], "empty-v1": [String](), "sized-v1": [String]()]
+    var secret: String?
 
     let runtime: AgentRuntime
     private(set) var screen = "home"
@@ -37,9 +38,19 @@ final class ToyApp: AgentAdapter {
         var fields: [String: JSONValue] = ["itemCount": .integer(Int64(items.count))]
         if let item { fields["item"] = .string(item) }
         if let savedName { fields["savedName"] = .string(savedName) }
+        if let secret { fields["auth"] = ["header": .string("Bearer \(secret)"), "list": [.string(secret)]] }
         return ScreenSnapshot(screenId: screen, windowId: "main", ready: !loading && !failed, fields: fields,
                               operationId: screen == "detail" ? presentation : nil,
                               blockers: loading ? ["item.load"] : failed ? ["item.failed"] : [])
+    }
+
+    func secretValues() -> [String] { secret.map { [$0] } ?? [] }
+
+    func loadFixture(_ id: String, arguments: [String: JSONValue], context: CommandContext) throws -> [String: JSONValue] {
+        guard id == "sized-v1" else { return try loadFixture(id, context: context) }
+        items = (0..<Int(arguments["count"]?.integerValue ?? 1)).map { "item\($0)" }
+        runtime.record("fixture.loaded", scope: "app", correlationId: context.requestId, changedFields: ["itemCount"])
+        return ["itemCount": .integer(Int64(items.count)), "echo": .string(secret ?? "")]
     }
 
     func resolve(route: String, context: RouteContext, fixture: String?) throws -> Destination {
@@ -57,6 +68,11 @@ final class ToyApp: AgentAdapter {
         screen = destination.screen
         item = destination.item
         failed = false
+        if destination.screen == "stuck" {
+            // Models a view that never reports its appearance.
+            loading = true
+            return presentation
+        }
         runtime.begin("screen", .screen, name: destination.screen, scope: destination.screen,
                       parentId: request.scenarioId, correlationId: request.requestId)
         if destination.screen == "detail" {
@@ -111,10 +127,12 @@ final class ToyApp: AgentAdapter {
             scopes: ["current-screen", "app"],
             routes: [
                 AgentRoute("home"),
+                AgentRoute("stuck"),
                 AgentRoute("detail", context: ObjectSchema(["item": .string(maxLength: 32)], required: ["item"]),
                            windowId: "main", readinessGates: ["item.load"])
             ],
             fixtures: Array(Self.fixtures.keys).sorted(),
+            fixtureArguments: ["sized-v1": ObjectSchema(["count": .integer(minimum: 0, maximum: 10)], required: ["count"])],
             actions: [
                 AgentAction("detail.save", scope: "detail", input: ObjectSchema(["name": .string(maxLength: 16)], required: ["name"]),
                             as: SaveInput.self, enabled: { [unowned self] in screen == "detail" && !loading }) { [unowned self] input, _ in
@@ -139,19 +157,20 @@ struct ToyHost {
     let client: AgentClient
 
     @MainActor
-    static func start(allowMutations: Bool = true) async throws -> ToyHost {
+    static func start(allowMutations: Bool = true, maxTimeoutMs: Int = 2_000) async throws -> ToyHost {
         let runtime = AgentRuntime()
         let app = ToyApp(runtime: runtime)
         let bundleId = "dev.agentdevkit.tests.toy." + UUID().uuidString
         let host = AgentHost(adapter: app, runtime: runtime, catalog: app.catalog, allowMutations: allowMutations,
-                             configuration: .init(identity: .fixed(bundleId: bundleId, buildFingerprint: "toy")))
+                             configuration: .init(limits: .init(maxTimeoutMs: maxTimeoutMs),
+                                                  identity: .fixed(bundleId: bundleId, buildFingerprint: "toy")))
         try await host.start()
         return ToyHost(host: host, app: app, client: try AgentClient(session: bundleId))
     }
 
     /// Runs `body` with a live host and always awaits `stop()`.
-    static func run(allowMutations: Bool = true, _ body: (ToyHost) async throws -> Void) async throws {
-        let toy = try await start(allowMutations: allowMutations)
+    static func run(allowMutations: Bool = true, maxTimeoutMs: Int = 2_000, _ body: (ToyHost) async throws -> Void) async throws {
+        let toy = try await start(allowMutations: allowMutations, maxTimeoutMs: maxTimeoutMs)
         do { try await body(toy) } catch {
             await toy.stop()
             throw error
@@ -180,8 +199,8 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
         try await ToyHost.run() { mutable in
             let capabilities = try #require(try await mutable.client.capabilities().result)
             #expect(capabilities.methods.contains("scenario.prepare"))
-            #expect(capabilities.routes.map(\.id) == ["home", "detail"])
-            #expect(capabilities.routes[1].contextSchema.objectValue?["required"] == ["item"])
+            #expect(capabilities.routes.map(\.id) == ["home", "stuck", "detail"])
+            #expect(capabilities.routes[2].contextSchema.objectValue?["required"] == ["item"])
             #expect(capabilities.conditions.map(\.id).contains("items.present"))
             #expect(capabilities.lifecycle.contains(.init(kind: .scenario, name: "scenario.prepare")))
             #expect(capabilities.libraryVersion == AgentDevKitVersion.current)
@@ -355,4 +374,77 @@ private func failure(_ body: () async throws -> some Any) async -> Failure? {
         #expect(AgentOperation.all.count == commands.count)
         #expect(AgentOperation.all.filter(\.mutating).map(\.tool).sorted() == ["fixtures", "invoke", "navigate", "prepare"])
     }
+
+    @Test func declaredSecretsAreRedactedFromEverySnapshotAndFixtureField() async throws {
+        try await ToyHost.run { toy in
+            await MainActor.run { toy.app.secret = "tok-123-secret" }
+            let screen = try await toy.call(AppCommands.snapshot, SnapshotRequest(scope: "current-screen"))
+            #expect(screen.fields["auth"] == ["header": "Bearer <redacted>", "list": ["<redacted>"]])
+            let observed = try await toy.call(AppCommands.observe, ObserveRequest(scope: "app"))
+            #expect(!"\(observed.screen.fields)".contains("tok-123"))
+            let loaded = try await toy.call(AppCommands.load, LoadFixture(fixture: "sized-v1", arguments: ["count": 3]))
+            #expect(loaded.fields["echo"] == "<redacted>")
+            #expect(loaded.fields["itemCount"] == 3)
+        }
+    }
+
+    @Test func fixtureArgumentsAreValidatedAndAdvertised() async throws {
+        try await ToyHost.run { toy in
+            let capabilities = try #require(try await toy.client.capabilities().result)
+            #expect(capabilities.fixtureArguments?["sized-v1"]?.objectValue?["required"] == ["count"])
+            let outOfRange = await failure { try await toy.call(AppCommands.load, LoadFixture(fixture: "sized-v1", arguments: ["count": 99])) }
+            #expect(outOfRange?.details?["field"] == "arguments.count")
+            let unexpected = await failure { try await toy.call(AppCommands.load, LoadFixture(fixture: "empty-v1", arguments: ["count": 1])) }
+            #expect(unexpected?.details?["field"] == "arguments.count")
+            let prepared = try await toy.call(AppCommands.prepare, PrepareScenario(fixture: "sized-v1", route: "home", fixtureArguments: ["count": 2]))
+            #expect(prepared.fixture.fields["itemCount"] == 2)
+        }
+    }
+
+    @Test func navigationTimeoutExplainsAMissingAppearance() async throws {
+        try await ToyHost.run { toy in
+            let timeout = await failure { try await toy.call(AppCommands.open, OpenScreen(route: "stuck"), timeoutMs: 400) }
+            #expect(timeout?.code == .timeout)
+            #expect(timeout?.details?["hint"]?.stringValue?.contains("onAppear") == true)
+            await MainActor.run { toy.app.loadDelay = .seconds(5) }
+            let pending = await failure {
+                try await toy.call(AppCommands.prepare, PrepareScenario(fixture: "two-items-v1", route: "detail", context: ["item": "a"]), timeoutMs: 400)
+            }
+            #expect(pending?.code == .timeout)
+            #expect(pending?.details?["hint"] == nil, "A screen that appeared but is still loading needs no hint.")
+        }
+    }
+
+    @Test @MainActor func spansCloseByIdForConcurrentWork() throws {
+        let runtime = AgentRuntime()
+        let first = UUID(), second = UUID()
+        runtime.begin(.work, name: "request.send", scope: "request", id: first)
+        runtime.begin(.work, name: "request.send", scope: "request", id: second)
+        #expect(runtime.end(id: second, outcome: .cancelled))
+        #expect(!runtime.end(id: second, outcome: .completed), "A span closes once.")
+        #expect(runtime.end(id: first, outcome: .completed))
+        #expect(runtime.journal.terminalLifecycle(second)?.outcome == .cancelled)
+        #expect(runtime.journal.activeLifecycles(.work).isEmpty)
+    }
+
+    @Test func longWaitsSpanSeveralRequestsWithinTheSessionLimit() async throws {
+        try await ToyHost.run(maxTimeoutMs: 500) { toy in
+            _ = try await toy.call(AppCommands.load, LoadFixture(fixture: "two-items-v1"))
+            await MainActor.run { toy.app.loadDelay = .milliseconds(1_200) }
+            _ = try await toy.client.call(AppCommands.open, OpenScreen(route: "detail", context: ["item": "a"], waitForReady: false))
+            let wait = try #require(AgentOperation.all.first { $0.tool == "wait" })
+            let started = ContinuousClock.now
+            let reply = try await wait.run(toy.client, ["condition": "screen.ready"], timeoutMs: 3_000)
+            #expect(reply.objectValue?["result"]?.objectValue?["satisfied"] == true)
+            #expect(started.duration(to: .now) > .milliseconds(900), "The wait outlasted one 500 ms request.")
+            await MainActor.run { toy.app.loadDelay = .seconds(5) }
+            _ = try await toy.client.call(AppCommands.open, OpenScreen(route: "detail", context: ["item": "b"], waitForReady: false))
+            let timeout = await failure { try await wait.run(toy.client, ["condition": "screen.ready"], timeoutMs: 1_200) }
+            #expect(timeout?.code == .timeout)
+            #expect(timeout?.details?["blockers"] == ["item.load"])
+            let tooLong = await failure { try await wait.run(toy.client, ["condition": "screen.ready"], timeoutMs: 999_999) }
+            #expect(tooLong?.code == .invalidParams)
+        }
+    }
+
 }

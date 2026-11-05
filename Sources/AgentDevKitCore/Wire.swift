@@ -239,6 +239,8 @@ public struct Capabilities: Codable, Sendable, Equatable {
     public let methods: [String]
     public let routes: [RouteCapability]
     public let fixtures: [String]
+    /// Argument schemas for fixtures that accept arguments, keyed by fixture ID. Absent before v0.4.
+    public let fixtureArguments: [String: JSONValue]?
     public let scopes: [String]
     public let actions: [String]
     public let conditions: [ConditionCapability]
@@ -298,8 +300,9 @@ public struct Capabilities: Codable, Sendable, Equatable {
         app: SessionIdentity, methods: [String], readOnly: Bool,
         routes: [RouteCapability] = [], fixtures: [String] = [], scopes: [String] = [], actions: [String] = [],
         conditions: [ConditionCapability] = [], lifecycle: [LifecycleCapability] = [], diagnosticCategories: [String] = [],
-        limits: Limits
+        fixtureArguments: [String: JSONValue] = [:], limits: Limits
     ) {
+        self.fixtureArguments = fixtureArguments.isEmpty ? nil : fixtureArguments
         self.protocolVersion = Wire.version
         self.libraryVersion = AgentDevKitVersion.current
         self.app = app

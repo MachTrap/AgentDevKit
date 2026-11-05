@@ -8,6 +8,7 @@
 - **Multiple sessions (`AMBIGUOUS_SESSION`) or changed app (`APP_INSTANCE_MISMATCH`).** Select the exact current UUID from the error details or `session list`. Verify the bundle ID and build fingerprint. Re-discover after rebuilding or relaunching.
 - **Permission denied.** Use read-only observations unless a test mutation is authorized. Confirm the isolated store and mutation opt-in. Never copy credentials into arguments or logs.
 - **Route or fixture unavailable.** Use capabilities from the selected session. If the app lacks the adapter, choose ordinary UI setup or add the smallest typed adapter within the requested scope.
+- **Navigation timeout with a `hint`.** The screen never reported its appearance for that presentation, even if the window looks right. Fix the app's appearance callback, for example `.onAppear` placed outside a changing `.id`, before retrying.
 - **Timeout.** Inspect the reported `blockers` array and recent diagnostics. A timed-out route may already have changed app state. Take a snapshot before retrying a mutation, or retry with the same request ID to receive the original response.
 - **`RESPONSE_TOO_LARGE` or `CONNECTION_LOST`.** Narrow the scope or page size. A lost connection may follow a committed mutation, so observe before retrying.
 - **GUI or AX unavailable.** Run the existing build, unit, or bridge checks and identify which UI evidence remains unavailable. Use regular Xcode/XCUITest or an authorized accessibility tool when the host supports it.

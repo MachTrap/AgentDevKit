@@ -92,6 +92,8 @@ public struct AgentCatalog: Sendable {
     public var scopes: [String]
     public var routes: [AgentRoute]
     public var fixtures: [String]
+    /// Optional argument schemas for fixtures, keyed by fixture ID. Fixtures without one accept no arguments.
+    public var fixtureArguments: [String: ObjectSchema]
     public var actions: [AgentAction]
     public var conditions: [AgentCondition]
     public var lifecycle: [LifecycleCapability]
@@ -101,12 +103,13 @@ public struct AgentCatalog: Sendable {
 
     public init(
         scopes: [String] = ["current-screen"], routes: [AgentRoute] = [], fixtures: [String] = [],
-        actions: [AgentAction] = [], conditions: [AgentCondition] = [], lifecycle: [LifecycleCapability] = [],
+        fixtureArguments: [String: ObjectSchema] = [:], actions: [AgentAction] = [], conditions: [AgentCondition] = [], lifecycle: [LifecycleCapability] = [],
         diagnosticCategories: [String] = [], commands: [AppCommand] = []
     ) {
         self.scopes = scopes
         self.routes = routes
         self.fixtures = fixtures
+        self.fixtureArguments = fixtureArguments
         self.actions = actions
         self.conditions = conditions
         self.lifecycle = lifecycle
@@ -120,6 +123,7 @@ public struct AgentCatalog: Sendable {
         var visible = self
         visible.routes = []
         visible.fixtures = []
+        visible.fixtureArguments = [:]
         visible.actions = []
         visible.lifecycle = lifecycle.filter { $0.kind != .scenario }
         visible.commands = commands.filter { !$0.mutating }

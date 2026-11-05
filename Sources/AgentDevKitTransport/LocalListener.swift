@@ -47,40 +47,56 @@ package struct LocalListener: Sendable {
         Darwin.close(socket)
     }
 
+    /// Accepts connections from a dispatch read source and serves at most `limits.connections`
+    /// at a time. No thread blocks while the listener is idle. While every slot is busy the source
+    /// stays suspended, so further peers wait in the kernel backlog instead of being dropped.
     package func run(
         handle: @escaping @Sendable (Data, DispatchTime) async -> Data,
         reject: @escaping @Sendable (Failure) -> Data
     ) async {
-        defer { close() }
-        await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<limits.connections {
-                group.addTask {
-                    await serveConnections(handle: handle, reject: reject)
-                }
-            }
+        let (readable, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        let source = DispatchSource.makeReadSource(fileDescriptor: socket, queue: Self.acceptQueue)
+        let gate = SourceGate(source)
+        source.setEventHandler {
+            gate.suspend()
+            signal.yield()
         }
+        let listener = socket
+        // Dispatch may still watch the descriptor until its cancel handler runs, so close it there.
+        source.setCancelHandler {
+            Darwin.close(listener)
+            signal.finish()
+        }
+        source.activate()
+        let connections = limits.connections
+        await withTaskCancellationHandler {
+            await withTaskGroup(of: Void.self) { group in
+                var running = 0
+                for await _ in readable {
+                    // Drain the backlog up to capacity, then re-arm the source.
+                    while !Task.isCancelled {
+                        if running >= connections {
+                            await group.next()
+                            running -= 1
+                            continue
+                        }
+                        let peer = Darwin.accept(listener, nil, nil)
+                        guard peer >= 0 else { break }
+                        running += 1
+                        group.addTask { await serve(peer, handle: handle, reject: reject) }
+                    }
+                    if Task.isCancelled { break }
+                    gate.resume()
+                }
+                group.cancelAll()
+            }
+        } onCancel: {
+            gate.cancel()
+        }
+        gate.cancel()
     }
 
-    private func serveConnections(
-        handle: @escaping @Sendable (Data, DispatchTime) async -> Data,
-        reject: @escaping @Sendable (Failure) -> Data
-    ) async {
-        while !Task.isCancelled {
-            do {
-                let peer = try await LocalSocket.offload {
-                    try LocalSocket.wait(socket, for: Int16(POLLIN), until: .now() + .milliseconds(200))
-                    return Darwin.accept(socket, nil, nil)
-                }
-                if peer >= 0 {
-                    await serve(peer, handle: handle, reject: reject)
-                }
-            } catch SocketError.timedOut {
-                continue
-            } catch {
-                return
-            }
-        }
-    }
+    private static let acceptQueue = DispatchQueue(label: "AgentDevKit.accept")
 
     private func serve(
         _ peer: Int32, handle: @escaping @Sendable (Data, DispatchTime) async -> Data,
@@ -161,4 +177,43 @@ package struct LocalListener: Sendable {
         }
     }
 
+}
+
+/// Balances suspend and resume on a dispatch source, and resumes before cancelling,
+/// because a suspended source never runs its cancel handler.
+private final class SourceGate: @unchecked Sendable {
+    private let source: any DispatchSourceRead
+    private let lock = NSLock()
+    private var suspended = false
+    private var cancelled = false
+
+    init(_ source: any DispatchSourceRead) { self.source = source }
+
+    func suspend() {
+        lock.withLock {
+            guard !suspended, !cancelled else { return }
+            suspended = true
+            source.suspend()
+        }
+    }
+
+    func resume() {
+        lock.withLock {
+            guard suspended, !cancelled else { return }
+            suspended = false
+            source.resume()
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            guard !cancelled else { return }
+            cancelled = true
+            source.cancel()
+            if suspended {
+                suspended = false
+                source.resume()
+            }
+        }
+    }
 }

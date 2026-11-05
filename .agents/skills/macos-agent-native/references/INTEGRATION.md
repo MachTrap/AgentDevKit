@@ -4,12 +4,18 @@
 
 1. Find the Xcode target, composition root, router, data store and existing tests. Pick one screen and the real service or coordinator that already owns it.
 2. Add a Testing app target with its own bundle ID and store.
-   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.3.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.3.0).
+   - Link the `AgentDevKitHost` and `AgentDevKitCore` products only in that target, from the [v0.4.0 source release](https://github.com/MachTrap/AgentDevKit/tree/v0.4.0).
    - Keep the bridge source and package products out of the normal Debug and Release targets.
    - Preserve the shipping app's entitlements.
 3. Start the bridge from a Testing-only composition root:
    - **SwiftUI:** a Testing-only `NSApplicationDelegateAdaptor`.
    - **AppKit:** the Testing target's existing `NSApplicationDelegate`.
+
+4. Make the Testing target Run-ready in Xcode:
+   - **Folders:** in Xcode 16 or later, use synchronized folder groups. The Testing target lists the app's source folder plus a `Testing` folder for the bridge files, so files you add later need no project edits.
+   - **Scheme:** give the Testing target a shared scheme whose Run arguments include `--enable-agentdevkit` (and `--allow-agentdevkit-mutations` for fixtures and actions). Pressing Run then starts the bridge.
+   - **Release guard:** add a Run Script phase that fails when `$CONFIGURATION` is not Debug, so the Testing target can never be archived.
+   - **Sandbox:** keep it on if the shipping app uses it. The bridge publishes in the app's own container.
 
    `LaunchOptions.parse()` reads the explicit opt-in arguments `--enable-agentdevkit`, `--allow-agentdevkit-mutations`, `--agentdevkit-profile UUID` and `--agentdevkit-fixture ID`. It rejects other `--agentdevkit` arguments unless you pass them as `appFlags`. `AgentSession` starts the host, shows a status string, and implements `applicationShouldTerminate` so the session is withdrawn before exit.
 
@@ -62,13 +68,18 @@ Declare everything in one `AgentCatalog`. The host builds both its method table 
   - `resolve(route:context:fixture:)` validates without changing state. When `fixture` is set, it validates against that fixture's data, which keeps the scenario preflight safe.
   - `present(_:request:)` uses the app's normal navigation and returns a presentation ID.
   - `readiness(of:)` reports `.ready`, `.pending(blockers:)`, `.failed(Failure)` or `.superseded`, based on actual view appearance and tracked work.
+  - Report appearance for every presentation. In SwiftUI, put `.onAppear` inside the identity that changes per presentation, as in `.onAppear { model.didAppear(id) }.id(id)`. A callback outside `.id` fires once, and every later navigation times out. A navigation timeout includes a `hint` when no screen appearance was recorded.
+  - The value `resolve` returns is the `NavigationTarget` associated type. Swift infers it from your method signatures, so an app type named `Destination` keeps working.
   - Implement `currentPresentation` so `screen.ready` waits notice replacement.
-- **Fixtures:** list the IDs in the catalog. `loadFixture(_:context:)` replaces deterministic data through the app's own persistence, only in isolated storage, and returns summary fields. Open storage with `TestingProfile(appName:profile:)`. Grant `allowMutations: true` only when storage opened and the runner passed the mutation opt-in.
+- **Fixtures:** list the IDs in the catalog. `loadFixture(_:context:)` replaces deterministic data through the app's own persistence, only in isolated storage, and returns summary fields. A fixture that needs inputs, such as the base URL of a test server, declares `fixtureArguments[id] = ObjectSchema(...)` and implements `loadFixture(_:arguments:context:)`. Tools pass `--fixture-args JSON`. Open storage with `TestingProfile(appName:profile:)`. Grant `allowMutations: true` only when storage opened and the runner passed the mutation opt-in.
 - **Actions:**
   - Declare each as `AgentAction(id, scope:, input: ObjectSchema, as: Input.self, enabled:, run:)`.
   - `run` returns `.completed`, or `.accepted(operationId:)` for tracked work that is still running.
   - Actions are semantic. They never prove that a control is visible, hittable or focusable.
 - **Conditions:** add `AgentCondition`s for app-specific waits. Built-ins cover `screen.ready`, `work.quiescent`, `operation.completed`, `lifecycle.ended` and `state.field_equals`.
+- **Secrets and size:**
+  - Return tokens, passwords and other credential values from `secretValues()`. The host replaces each one with `<redacted>` in every snapshot field, fixture field and diagnostic message, so one missed field cannot leak them.
+  - Bound unlimited text, such as response bodies or logs, with `ScreenSnapshot.preview(text, maxBytes:)`.
 
 Read-only sessions hide routes, fixtures, actions and scenario lifecycle entries. They answer mutating methods with `PERMISSION_DENIED`. `Examples/AgentLab/AgentIntegration/LabAdapter.swift` is a complete mutation-enabled adapter.
 
@@ -79,7 +90,7 @@ For each feature, agree on these during implementation: route and context, readi
 Record boundaries on the `AgentRuntime`, on the main actor with the state they describe:
 
 - **Screen:** call `runtime.begin("screen", .screen, …)` at actual presentation and `runtime.end("screen", outcome:)` at departure.
-- **Work:** use a slot such as `"document"` at the owning service, and close it on success, failure, cancellation and replacement.
+- **Work:** use a slot such as `"document"` at the owning service, and close it on success, failure, cancellation and replacement. For concurrent work, such as several requests in flight, begin each span with its operation ID and close it with `runtime.end(id:outcome:)`. Return that ID from an action as `.accepted(operationId:)`, so agents can wait on `operation.completed`.
 - **Errors:** use `runtime.withLifecycle` for scoped work that throws.
 
 Use static names, the presentation ID as the work span ID, and the scenario ID as the parent ID. Keep user data out of events and diagnostics. List the names in `catalog.lifecycle`. The library adds `scenario.prepare` itself. `Examples/AgentLab/AgentIntegration/LabEvents.swift` maps a whole model's changes in about 60 lines.
@@ -96,7 +107,7 @@ Use static names, the presentation ID as the work span ID, and the scenario ID a
   - `LoopbackPairing` stores only a security-scoped bookmark and holds the folder's scope until the session stops.
   - Bind `session.pair()` and `session.forgetPairing()` to Testing-only controls.
 
-See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.3.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
+See the [signed AgentLab setup](https://github.com/MachTrap/AgentDevKit/blob/v0.4.0/Examples/AgentLab/README.md#sandboxed-testing) for entitlements, signing and the sample identity generator.
 
 ## Verify the integration
 

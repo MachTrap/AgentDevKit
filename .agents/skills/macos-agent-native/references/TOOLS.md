@@ -1,6 +1,6 @@
 # Tool commands
 
-Build the CLI from the v0.3.0 checkout with `swift build -c release --product agentdevctl`, then use `.build/release/agentdevctl` or put it on your path. Tools and app must come from the same release: v0.3 speaks `agentdevkit/2`.
+Build the CLI from the v0.4.0 checkout with `swift build -c release --product agentdevctl`, then use `.build/release/agentdevctl` or put it on your path. Tools and app must come from the same release: v0.3 speaks `agentdevkit/2`.
 
 A Testing app must be running with its bridge explicitly enabled. AgentLab uses `--enable-agentdevkit`. To permit fixture, route and save commands, also pass `--allow-agentdevkit-mutations`.
 
@@ -45,6 +45,8 @@ agentdevctl --session SESSION_ID action invoke --id inspector.save \
 - **Finished spans.** `wait --condition lifecycle.ended --operation UUID` returns a retained span outcome even after you have navigated elsewhere.
 - **Checking without failing.** Add `--no-fail-on-timeout` to receive `satisfied: false` and the open `blockers` instead of a TIMEOUT error.
 - **Other conditions.** Pass arguments with `--args JSON`, or with `--field KEY --value JSON`.
+- **Long waits.** `wait --timeout-ms` accepts up to 120000. A wait longer than the session's `limits.maxTimeoutMs` runs as consecutive requests, and returns as soon as the condition holds. MCP `agentdevkit_wait` behaves the same way.
+- **Fixture arguments.** `fixtures load` and `scenario prepare` take `--fixture-args JSON` matching `capabilities.fixtureArguments[fixture]`, for example a test server's base URL.
 
 Use `observe` when you need both state and changes:
 
@@ -52,6 +54,15 @@ Use `observe` when you need both state and changes:
 - When paging, continue from the delta's `nextRevision`. If `hasMore` is true, keep reading before claiming you observed every retained change.
 - `action invoke --revision` fails with `STALE_REVISION` when app state moved. Read fresh state before retrying.
 - A repeated request ID returns the original response and does not run the command again.
+
+For scripted checks, drive the CLI from Python and parse one JSON envelope per call. Shell variables that hold a whole command are not split into words in zsh:
+
+```python
+import json, subprocess
+def run(*args):
+    out = subprocess.run(["agentdevctl", "--session", "BUNDLE_ID", *args, "--json"], capture_output=True, text=True)
+    return json.loads(out.stdout)   # check out.returncode against the documented exit codes
+```
 
 For a sandboxed app that publishes in its own container, select it by bundle ID with `--session BUNDLE_ID`, or put `--container BUNDLE_ID` before the command. `session list` does not scan containers. For App Group or paired loopback sessions, put `--app-group TEAMID.adk` or `--pairing-dir /absolute/private/folder` before the command. Use the same location for discovery and every later command. Discover again after a relaunch, because the session UUID rotates.
 
